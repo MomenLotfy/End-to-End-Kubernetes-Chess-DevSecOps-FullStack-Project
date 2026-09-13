@@ -34,6 +34,9 @@ export default function ChessBoard({ board, sel, mvSet, lastMv, ckKing, onSquare
             ))}
           </div>
           <div>
+            <div style={{ display: "flex", justifyContent: "center" }}>
+              {FILES.map((f, i) => <div key={f} style={{ width: `${SZ}px`, height: "16px", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "0.6rem", fontWeight: 700, fontFamily: "var(--font-ui)", color: i % 2 === 0 ? C.dk : C.lt, userSelect: "none" }}>{f}</div>)}
+            </div>
             <div style={{ display: "grid", gridTemplateColumns: `repeat(8,${SZ}px)`, gridTemplateRows: `repeat(8,${SZ}px)`, borderRadius: "3px", overflow: "hidden", boxShadow: "0 0 0 1px rgba(0,0,0,0.4)" }}>
               {[0, 1, 2, 3, 4, 5, 6, 7].map(r => [0, 1, 2, 3, 4, 5, 6, 7].map(c => {
                 const p = board[r][c], isT = mvSet.has(`${r},${c}`), hasP = !!p, isSel = sel && sel[0] === r && sel[1] === c;
@@ -61,6 +64,11 @@ export default function ChessBoard({ board, sel, mvSet, lastMv, ckKing, onSquare
             <div style={{ display: "flex" }}>
               {FILES.map((f, i) => <div key={f} style={{ width: `${SZ}px`, height: "16px", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "0.6rem", fontWeight: 700, fontFamily: "var(--font-ui)", color: i % 2 === 0 ? C.dk : C.lt, userSelect: "none" }}>{f}</div>)}
             </div>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column" }}>
+            {[0, 1, 2, 3, 4, 5, 6, 7].map(r => (
+              <div key={r} style={{ width: "16px", height: `${SZ}px`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "0.6rem", fontWeight: 700, fontFamily: "var(--font-ui)", color: r % 2 === 0 ? C.dk : C.lt, userSelect: "none" }}>{8 - r}</div>
+            ))}
           </div>
         </div>
       </div>

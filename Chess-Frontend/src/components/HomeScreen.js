@@ -55,8 +55,16 @@ export default function HomeScreen({ user, token, onLogout, onAuthSuccess, onPla
 
       <Sparkle style={{ bottom: "36px", right: "36px" }} />
 
-      {/* top-right utility icons */}
       <div style={{ position: "fixed", top: "18px", right: "18px", display: "flex", gap: "10px", zIndex: 5 }}>
+        {user ? (
+          <>
+            <div className="cm-btn" style={iconBtn} onClick={() => setShowProfile(true)} title="Profile">👤</div>
+            <div className="cm-btn" style={iconBtn} onClick={() => setShowFriends(true)} title="Friends">👥</div>
+            <div className="cm-btn" style={iconBtn} onClick={onLogout} title="Logout">🚪</div>
+          </>
+        ) : (
+          <div className="cm-btn" style={iconBtn} onClick={() => setShowAuth(true)} title="Sign In / Register">🔑</div>
+        )}
         <div className="cm-btn" style={iconBtn} onClick={() => setShowSettings(true)} title="Settings">⚙</div>
       </div>
 
@@ -77,15 +85,7 @@ export default function HomeScreen({ user, token, onLogout, onAuthSuccess, onPla
           <div style={{ fontSize: "var(--fs-caption)", color: C.txMut, letterSpacing: "0.22em", marginTop: "6px", textTransform: "uppercase" }}>Premium Chess Club</div>
         </div>
 
-        {user ? (
-          <div style={{ color: C.tx, fontSize: "var(--fs-small)", textAlign: "center", padding: "8px 18px", background: C.pnl, border: `1px solid ${C.pnlBd}`, borderRadius: "var(--r-full)", display: "flex", alignItems: "center", gap: "12px" }}>
-            <span onClick={() => setShowProfile(true)} style={{ cursor: "pointer", fontWeight: 600 }}>♟ {user.username}</span>
-            <span onClick={() => setShowFriends(true)} style={{ color: C.txMut, cursor: "pointer" }}>Friends</span>
-            <span onClick={onLogout} style={{ color: C.txMut, cursor: "pointer", textDecoration: "underline" }}>Logout</span>
-          </div>
-        ) : (
-          <Button variant="secondary" size="sm" onClick={() => setShowAuth(true)}>Sign In / Register</Button>
-        )}
+        {/* Auth/Profile moved to navbar */}
 
         <div style={{ width: "100%" }}>
           <div style={{ fontSize: "var(--fs-caption)", color: C.txMut, letterSpacing: "0.14em", textTransform: "uppercase", textAlign: "center", marginBottom: "10px" }}>Time Control</div>

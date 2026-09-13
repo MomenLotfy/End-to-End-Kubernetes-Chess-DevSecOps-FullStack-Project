@@ -1,0 +1,192 @@
+# ============================================================
+# namespace.yaml — Chess Namespace
+# ============================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: chess
+  labels:
+    name: chess
+    environment: dev
+    managed-by: argocd
+
+---
+# ============================================================
+# hpa-frontend.yaml — HPA for Frontend
+# ============================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: chess-frontend-hpa
+  namespace: chess
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: chess-frontend
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+
+---
+# ============================================================
+# hpa-backend.yaml — HPA for Backend
+# ============================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: chess-backend-hpa
+  namespace: chess
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: chess-backend
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+
+---
+# ============================================================
+# network-policy.yaml — تقييد التواصل الشبكي
+# ============================================================
+
+# Frontend: يقبل فقط من LoadBalancer
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: chess-frontend-netpol
+  namespace: chess
+spec:
+  podSelector:
+    matchLabels:
+      app: chess-frontend
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - ports:
+    - port: 80
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app: chess-backend
+    ports:
+    - port: 5000
+  - ports:
+    - port: 53   # DNS
+      protocol: UDP
+
+---
+# Backend: يقبل فقط من Frontend
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: chess-backend-netpol
+  namespace: chess
+spec:
+  podSelector:
+    matchLabels:
+      app: chess-backend
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: chess-frontend
+    ports:
+    - port: 5000
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app: chess-postgres
+    ports:
+    - port: 5432
+  - ports:
+    - port: 53
+      protocol: UDP
+
+---
+# PostgreSQL: يقبل فقط من Backend
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: chess-postgres-netpol
+  namespace: chess
+spec:
+  podSelector:
+    matchLabels:
+      app: chess-postgres
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: chess-backend
+    ports:
+    - port: 5432
+
+---
+# ============================================================
+# rbac.yaml — RBAC
+# ============================================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: chess-sa
+  namespace: chess
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: chess-role
+  namespace: chess
+rules:
+- apiGroups: ["apps"]
+  resources: ["deployments","replicasets","statefulsets"]
+  verbs: ["get","list","watch","create","update","patch"]
+- apiGroups: [""]
+  resources: ["pods","services","endpoints","configmaps","persistentvolumeclaims"]
+  verbs: ["get","list","watch","create","update","patch","delete"]
+- apiGroups: ["autoscaling"]
+  resources: ["horizontalpodautoscalers"]
+  verbs: ["get","list","watch","create","update","patch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: chess-role-binding
+  namespace: chess
+subjects:
+- kind: ServiceAccount
+  name: chess-sa
+  namespace: chess
+roleRef:
+  kind: Role
+  apiVersion: rbac.authorization.k8s.io/v1
+  name: chess-role

@@ -1,0 +1,14 @@
+aws-region          = "us-east-1"
+vpc-name            = "Jenkins-vpc"
+igw-name            = "Jenkins-igw"
+subnet-name         = "Jenkins-subnet"
+subnet-name2        = "Jenkins-subnet2"
+security-group-name = "Jenkins-sg"
+rt-name2            = "Jenkins-route-table2"
+cluster-name        = "Chess-EKS-Cluster"
+eksnode-group-name  = "Chess-Node-Group"
+eks-version         = "1.33"
+node-instance-type  = "t3.medium"
+node-desired-size   = 2
+node-max-size       = 4
+node-min-size       = 1

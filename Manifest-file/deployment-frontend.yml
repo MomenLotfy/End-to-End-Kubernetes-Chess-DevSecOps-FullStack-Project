@@ -1,0 +1,83 @@
+# ============================================================
+# deployment-frontend.yml
+# Chess Frontend — Deployment + Service
+# ============================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chess-frontend
+  namespace: chess
+  labels:
+    app: chess-frontend
+    tier: frontend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: chess-frontend
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: chess-frontend
+        tier: frontend
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        fsGroup: 101
+      containers:
+      - name: chess-frontend
+        image: YOUR_DOCKERHUB_USERNAME/chess-frontend:1   # يُحدَّث تلقائياً
+        ports:
+        - containerPort: 80
+          name: http
+        env:
+        - name: REACT_APP_API_URL
+          value: "http://chess-backend-service:5000"
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "200m"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 10
+          periodSeconds: 20
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: [ALL]
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chess-frontend-service
+  namespace: chess
+  labels:
+    app: chess-frontend
+spec:
+  selector:
+    app: chess-frontend
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 80
+    name: http
+  type: LoadBalancer

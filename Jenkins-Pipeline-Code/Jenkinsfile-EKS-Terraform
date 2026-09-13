@@ -1,0 +1,233 @@
+// ============================================================
+// Jenkinsfile-EKS-Terraform
+// + Slack Notifications + Email Notifications
+// ============================================================
+
+properties([
+    parameters([
+        string(
+            defaultValue: 'variables.tfvars',
+            description: 'اسم ملف المتغيرات',
+            name: 'File-Name'
+        ),
+        choice(
+            choices: ['apply', 'destroy'],
+            description: 'اختر العملية: إنشاء أو تدمير',
+            name: 'Terraform-Action'
+        )
+    ])
+])
+
+pipeline {
+    agent any
+
+    environment {
+        AWS_REGION       = 'us-east-1'
+        SLACK_CHANNEL    = '#devsecops-pipeline'
+        EMAIL_RECIPIENT  = 'team@yourcompany.com'
+        JENKINS_BASE_URL = 'http://YOUR_JENKINS_IP:8080'
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                cleanWs()
+                script {
+                    def action = params.'Terraform-Action'
+                    def icon   = action == 'apply' ? '🏗️' : '🗑️'
+                    slackNotify('STARTED',
+                        "${icon} *بدأ EKS Pipeline*\n" +
+                        "العملية: *${action.toUpperCase()}* | Build: #${BUILD_NUMBER}"
+                    )
+                }
+                git branch: 'master',
+                    url: 'https://github.com/YOUR_USERNAME/End-to-End-Kubernetes-DevSecOps-Chess-Project.git'
+            }
+        }
+
+        stage('Terraform Init') {
+            steps {
+                withAWS(credentials: 'aws-key', region: "${AWS_REGION}") {
+                    dir('EKS-TF') {
+                        sh 'terraform init -upgrade'
+                    }
+                }
+            }
+        }
+
+        stage('Terraform Validate') {
+            steps {
+                withAWS(credentials: 'aws-key', region: "${AWS_REGION}") {
+                    dir('EKS-TF') {
+                        sh 'terraform validate'
+                        sh 'terraform fmt -check'
+                    }
+                }
+            }
+            post {
+                failure {
+                    slackNotify('FAILURE', "❌ *Terraform Validate فشل!*\nخطأ في كود Terraform — راجع السجل")
+                }
+            }
+        }
+
+        stage('Terraform Plan') {
+            steps {
+                withAWS(credentials: 'aws-key', region: "${AWS_REGION}") {
+                    dir('EKS-TF') {
+                        sh "terraform plan -var-file=${params.'File-Name'} -out=tfplan"
+                    }
+                }
+            }
+            post {
+                success {
+                    slackNotify('INFO', "📋 *Terraform Plan مكتمل* — جاهز للتنفيذ")
+                }
+            }
+        }
+
+        stage('Terraform Action') {
+            steps {
+                withAWS(credentials: 'aws-key', region: "${AWS_REGION}") {
+                    dir('EKS-TF') {
+                        script {
+                            if (params.'Terraform-Action' == 'apply') {
+                                sh 'terraform apply -auto-approve tfplan'
+                                sh 'terraform output'
+                            } else if (params.'Terraform-Action' == 'destroy') {
+                                sh "terraform destroy -auto-approve -var-file=${params.'File-Name'}"
+                            } else {
+                                error "قيمة غير صالحة: ${params.'Terraform-Action'}"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Configure kubectl') {
+            when {
+                expression { params.'Terraform-Action' == 'apply' }
+            }
+            steps {
+                withAWS(credentials: 'aws-key', region: "${AWS_REGION}") {
+                    sh """
+                        aws eks update-kubeconfig \
+                          --region ${AWS_REGION} \
+                          --name Chess-EKS-Cluster
+                        kubectl get nodes
+                    """
+                }
+            }
+            post {
+                success {
+                    slackNotify('INFO', "☸️ *kubectl مُعدَّل* — الكتلة جاهزة")
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            script {
+                def action  = params.'Terraform-Action'
+                def dur     = currentBuild.durationString.replace(' and counting', '')
+                def icon    = action == 'apply' ? '🏗️' : '🗑️'
+                def verb    = action == 'apply' ? 'أُنشئت' : 'حُذفت'
+
+                slackNotify('SUCCESS',
+                    "${icon} *EKS Pipeline اكتمل بنجاح!*\n" +
+                    "━━━━━━━━━━━━━━━━━━━━━━━━\n" +
+                    "العملية: *${action.toUpperCase()}*\n" +
+                    "الكتلة: *Chess-EKS-Cluster* — ${verb}\n" +
+                    "⏱️ المدة: ${dur}\n" +
+                    "🔗 <${JENKINS_BASE_URL}/job/${JOB_NAME}/${BUILD_NUMBER}/|التفاصيل>\n" +
+                    "━━━━━━━━━━━━━━━━━━━━━━━━"
+                )
+                emailext(
+                    subject: "${icon} [Jenkins] EKS ${action.toUpperCase()} — Build #${BUILD_NUMBER} نجح",
+                    body: buildEKSEmailBody('SUCCESS', action, dur),
+                    to: "${EMAIL_RECIPIENT}",
+                    mimeType: 'text/html'
+                )
+            }
+        }
+        failure {
+            script {
+                def action = params.'Terraform-Action'
+                def dur    = currentBuild.durationString.replace(' and counting', '')
+                slackNotify('FAILURE',
+                    "❌ *EKS Pipeline فشل!*\n" +
+                    "━━━━━━━━━━━━━━━━━━━━━━━━\n" +
+                    "العملية: *${action.toUpperCase()}*\n" +
+                    "المرحلة: *${env.STAGE_NAME ?: 'غير محدد'}*\n" +
+                    "🔗 <${JENKINS_BASE_URL}/job/${JOB_NAME}/${BUILD_NUMBER}/console|عرض السجل>\n" +
+                    "━━━━━━━━━━━━━━━━━━━━━━━━"
+                )
+                emailext(
+                    subject: "❌ [Jenkins] EKS ${action.toUpperCase()} — Build #${BUILD_NUMBER} فشل",
+                    body: buildEKSEmailBody('FAILURE', action, dur),
+                    to: "${EMAIL_RECIPIENT}",
+                    mimeType: 'text/html',
+                    attachLog: true
+                )
+            }
+        }
+    }
+}
+
+// ── Helper Functions ─────────────────────────────────────────
+
+def slackNotify(String type, String message) {
+    def colors = [STARTED:'#36a64f', SUCCESS:'#2eb886', FAILURE:'#e01e5a', WARNING:'#ecb22e', INFO:'#36c5f0']
+    slackSend(
+        channel: env.SLACK_CHANNEL,
+        color: colors[type] ?: '#808080',
+        message: "${message}\n_Job: ${env.JOB_NAME} | ${new Date().format('dd/MM/yyyy HH:mm')}_"
+    )
+}
+
+def buildEKSEmailBody(String status, String action, String duration) {
+    def isSuccess   = (status == 'SUCCESS')
+    def statusColor = isSuccess ? '#2eb886' : '#e01e5a'
+    def statusIcon  = isSuccess ? '✅' : '❌'
+    def statusText  = isSuccess ? 'اكتمل بنجاح' : 'فشل'
+    def actionIcon  = action == 'apply' ? '🏗️' : '🗑️'
+
+    return """<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head><meta charset="UTF-8">
+<style>
+  body{font-family:Arial,sans-serif;background:#f4f4f4;margin:0;padding:20px}
+  .wrap{max-width:640px;margin:auto;background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.12)}
+  .hdr{background:${statusColor};color:#fff;padding:28px 32px;text-align:center}
+  .hdr h1{margin:0;font-size:26px}.hdr p{margin:6px 0 0;opacity:.85;font-size:14px}
+  .bdy{padding:28px 32px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:20px 0}
+  .card{background:#f8f9fa;border-radius:8px;padding:14px 18px;border-right:4px solid ${statusColor}}
+  .card .lbl{font-size:11px;color:#888;margin-bottom:3px}.card .val{font-size:15px;font-weight:bold;color:#222}
+  .btns{text-align:center;margin:28px 0 8px}
+  .btn{display:inline-block;padding:12px 26px;border-radius:7px;text-decoration:none;font-weight:bold;font-size:14px;margin:0 6px;color:#fff}
+  .ftr{background:#f8fafc;padding:16px 32px;text-align:center;color:#94a3b8;font-size:12px;border-top:1px solid #e2e8f0}
+</style></head>
+<body><div class="wrap">
+  <div class="hdr">
+    <h1>${statusIcon} EKS ${action.toUpperCase()} ${statusText}</h1>
+    <p>${actionIcon} Chess-EKS-Cluster — Build #${env.BUILD_NUMBER}</p>
+  </div>
+  <div class="bdy">
+    <div class="grid">
+      <div class="card"><div class="lbl">⚙️ العملية</div><div class="val">${action.toUpperCase()}</div></div>
+      <div class="card"><div class="lbl">🔢 رقم البناء</div><div class="val">#${env.BUILD_NUMBER}</div></div>
+      <div class="card"><div class="lbl">☸️ الكتلة</div><div class="val">Chess-EKS-Cluster</div></div>
+      <div class="card"><div class="lbl">⏱️ المدة</div><div class="val">${duration}</div></div>
+    </div>
+    <div class="btns">
+      <a class="btn" style="background:${statusColor}" href="${env.JENKINS_BASE_URL}/job/${env.JOB_NAME}/${env.BUILD_NUMBER}/">🔍 التفاصيل</a>
+      <a class="btn" style="background:#475569" href="${env.JENKINS_BASE_URL}/job/${env.JOB_NAME}/${env.BUILD_NUMBER}/console">📋 السجل</a>
+    </div>
+  </div>
+  <div class="ftr">Jenkins CI/CD | Chess DevSecOps Pipeline<br>هذا البريد أُرسل تلقائياً — لا ترد عليه</div>
+</div></body></html>"""
+}

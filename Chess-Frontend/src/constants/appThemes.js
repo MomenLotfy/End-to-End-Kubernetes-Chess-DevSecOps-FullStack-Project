@@ -1,0 +1,56 @@
+// ============================================================
+// constants/appThemes.js — Dark / Light Mode
+// "Premium Chess Club": خشب غامق + دهبي (Dark) أو رخام كريمي (Light)
+// ============================================================
+export const APP_THEMES = {
+  dark: {
+    key: "dark", name: "Dark",
+    bg: "#120e0b",
+    bgGradient: "radial-gradient(ellipse 80% 60% at 50% -10%, rgba(201,121,58,0.10), transparent), #120e0b",
+    surface: "#1c1712",
+    surfaceHover: "#241d16",
+    modalBg: "#241a12",
+    tx: "#f0e6d6",
+    txMut: "#a3907a",
+    txFaint: "#6b5c4a",
+    accent: "#c9793a",
+    accentHv: "#dd8f4f",
+    gold: "#d4af6a",
+    goldSoft: "rgba(212,175,106,0.35)",
+    btn: "#c9793a",
+    btnHv: "#dd8f4f",
+    pnl: "rgba(212,175,106,0.05)",
+    pnlBd: "rgba(212,175,106,0.16)",
+    border: "rgba(212,175,106,0.18)",
+    wood: "#5c3a1e", woodDk: "#3d2513", woodBd: "#26160b",
+    success: "#4caf6d",
+    danger: "#d1554f",
+    warning: "#e0b24a",
+  },
+  light: {
+    key: "light", name: "Light",
+    bg: "#ece0c8",
+    bgGradient: "radial-gradient(ellipse 80% 60% at 50% -10%, rgba(201,121,58,0.08), transparent), #ece0c8",
+    surface: "#f7efdd",
+    surfaceHover: "#fbf6ea",
+    modalBg: "#f9f2e2",
+    tx: "#3a2513",
+    txMut: "#7a5c3a",
+    txFaint: "#a68f6c",
+    accent: "#b8672c",
+    accentHv: "#c97a3d",
+    gold: "#9c6b2e",
+    goldSoft: "rgba(156,107,46,0.28)",
+    btn: "#6b4423",
+    btnHv: "#84582f",
+    pnl: "rgba(107,68,35,0.06)",
+    pnlBd: "rgba(107,68,35,0.22)",
+    border: "rgba(107,68,35,0.24)",
+    wood: "#a97a45", woodDk: "#8a5f34", woodBd: "#6b451c",
+    success: "#3d9560",
+    danger: "#c4443f",
+    warning: "#b8862f",
+  },
+};
+
+export const APP_THEME_LIST = Object.values(APP_THEMES).map(t => ({ key: t.key, name: t.name }));

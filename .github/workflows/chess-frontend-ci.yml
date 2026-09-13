@@ -1,0 +1,137 @@
+# ============================================================
+# .github/workflows/chess-frontend-ci.yml
+# GitHub Actions — Chess Frontend CI
+# ============================================================
+
+name: "Chess Frontend — CI Pipeline"
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - "Chess-Frontend/**"
+      - ".github/workflows/chess-frontend-ci.yml"
+  pull_request:
+    branches: [master, main]
+    paths:
+      - "Chess-Frontend/**"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  APP_DIR:  Chess-Frontend
+  APP_NAME: chess-frontend
+
+jobs:
+
+  secret-scanning:
+    name: "🔐 Secret Scanning"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Notify Slack
+        if: always()
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {"text": "${{ job.status == 'success' && '✅' || '❌' }} *Secret Scan — Frontend* | Branch: ${{ github.ref_name }}"}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+  code-quality:
+    name: "🔍 Code Lint"
+    runs-on: ubuntu-latest
+    needs: secret-scanning
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: "${{ env.APP_DIR }}/package-lock.json"
+      - name: Install & Lint
+        working-directory: ${{ env.APP_DIR }}
+        run: |
+          npm ci
+          npx eslint src/ --ext .js,.jsx --format json \
+            --output-file eslint-report.json || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eslint-frontend
+          path: ${{ env.APP_DIR }}/eslint-report.json
+          retention-days: 7
+
+  trivy-scan:
+    name: "🛡️ Trivy Filesystem Scan"
+    runs-on: ubuntu-latest
+    needs: secret-scanning
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: "fs"
+          scan-ref: "${{ env.APP_DIR }}"
+          severity: "HIGH,CRITICAL"
+          format: "sarif"
+          output: "trivy-frontend.sarif"
+          exit-code: "0"
+      - uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: "fs"
+          scan-ref: "${{ env.APP_DIR }}"
+          severity: "HIGH,CRITICAL"
+          format: "table"
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: "trivy-frontend.sarif"
+          category: "trivy-frontend"
+
+  dockerfile-lint:
+    name: "🐳 Dockerfile Lint"
+    runs-on: ubuntu-latest
+    needs: secret-scanning
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: "${{ env.APP_DIR }}/Dockerfile"
+          no-fail: true
+
+  trigger-jenkins:
+    name: "🚀 Trigger Jenkins Frontend Pipeline"
+    runs-on: ubuntu-latest
+    needs: [secret-scanning, trivy-scan, code-quality, dockerfile-lint]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main')
+    steps:
+      - name: Notify Slack
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {"text": "🔄 *GitHub Actions Frontend اكتملت — تشغيل Jenkins*\nBranch: ${{ github.ref_name }} | By: ${{ github.actor }}"}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+      - name: Trigger Jenkins Frontend
+        run: |
+          CRUMB=$(curl -s "${{ secrets.JENKINS_URL }}/crumbIssuer/api/json" \
+            --user "${{ secrets.JENKINS_USER }}:${{ secrets.JENKINS_TOKEN }}" \
+            | python3 -c "import sys,json; print(json.load(sys.stdin)['crumb'])")
+
+          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST "${{ secrets.JENKINS_URL }}/job/${{ secrets.JENKINS_JOB_FRONTEND_NAME }}/build" \
+            --user "${{ secrets.JENKINS_USER }}:${{ secrets.JENKINS_TOKEN }}" \
+            -H "Jenkins-Crumb: $CRUMB")
+
+          echo "Status: $RESPONSE"
+          [ "$RESPONSE" == "201" ] || [ "$RESPONSE" == "200" ] || exit 1

@@ -1,0 +1,22 @@
+# ============================================================
+# servicemonitor.yaml — ربط Prometheus بتطبيق Chess (جديد)
+# ============================================================
+
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: chess-monitor
+  namespace: monitoring
+  labels:
+    release: monitoring    # يطابق اسم Helm release
+spec:
+  namespaceSelector:
+    matchNames:
+    - chess
+  selector:
+    matchLabels:
+      app: chess
+  endpoints:
+  - port: http
+    path: /health
+    interval: 30s

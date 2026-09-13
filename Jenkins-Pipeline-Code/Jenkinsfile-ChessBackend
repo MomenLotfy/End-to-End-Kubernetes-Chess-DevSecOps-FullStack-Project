@@ -1,0 +1,287 @@
+// ============================================================
+// Jenkinsfile-ChessBackend
+// CI/CD Pipeline — Chess Backend (Node.js + Express)
+// ============================================================
+
+pipeline {
+    agent any
+
+    tools {
+        jdk    'jdk17'
+        nodejs 'nodejs22'
+    }
+
+    environment {
+        SCANNER_HOME     = tool 'sonar-scanner'
+        APP_NAME         = 'chess-backend'
+        APP_DIR          = 'Chess-Backend'
+        DOCKER_USER      = 'YOUR_DOCKERHUB_USERNAME'
+        GIT_USER_NAME    = 'YOUR_GITHUB_USERNAME'
+        GIT_USER_EMAIL   = 'your@email.com'
+        GIT_REPO_NAME    = 'End-to-End-Kubernetes-DevSecOps-Chess-Project'
+        IMAGE_TAG        = "${DOCKER_USER}/${APP_NAME}:${BUILD_NUMBER}"
+        SLACK_CHANNEL    = '#devsecops-pipeline'
+        EMAIL_RECIPIENT  = 'team@yourcompany.com'
+        JENKINS_BASE_URL = 'http://YOUR_JENKINS_IP:8080'
+    }
+
+    stages {
+
+        stage('Cleaning Workspace') {
+            steps {
+                cleanWs()
+                script {
+                    slackNotify('STARTED',
+                        "🚀 *بدأ Pipeline — Chess Backend*\n" +
+                        "Build: #${BUILD_NUMBER} | Branch: master"
+                    )
+                }
+            }
+        }
+
+        stage('Checkout from Git') {
+            steps {
+                git branch: 'master',
+                    url: "https://github.com/${GIT_USER_NAME}/${GIT_REPO_NAME}.git"
+            }
+        }
+
+        stage('Secret Scanning') {
+            steps {
+                sh '''
+                    gitleaks detect \
+                      --source . \
+                      --report-format json \
+                      --report-path gitleaks-report.json \
+                      --exit-code 0
+                '''
+                archiveArtifacts artifacts: 'gitleaks-report.json', allowEmptyArchive: true
+            }
+            post {
+                failure { script { slackNotify('FAILURE', "🔐 *Secret Scanning فشل!*") } }
+            }
+        }
+
+        stage('SonarQube Analysis') {
+            steps {
+                dir("${APP_DIR}") {
+                    withSonarQubeEnv('sonar-server') {
+                        sh """
+                            \$SCANNER_HOME/bin/sonar-scanner \
+                              -Dsonar.projectName=ChessBackend \
+                              -Dsonar.projectKey=ChessBackend \
+                              -Dsonar.sources=src \
+                              -Dsonar.exclusions=**/*.test.js,**/node_modules/**
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Quality Gate') {
+            steps {
+                script {
+                    def qg = waitForQualityGate abortPipeline: true, credentialsId: 'sonar-token'
+                    if (qg.status != 'OK') {
+                        slackNotify('FAILURE', "🔴 *Quality Gate فشل!* — ${qg.status}")
+                        error "Quality Gate failed: ${qg.status}"
+                    } else {
+                        slackNotify('INFO', "✅ *Quality Gate نجح*")
+                    }
+                }
+            }
+        }
+
+        stage('Installing Dependencies') {
+            steps {
+                dir("${APP_DIR}") {
+                    sh 'npm ci'
+                }
+            }
+        }
+
+        stage('OWASP Dependency-Check') {
+            steps {
+                dir("${APP_DIR}") {
+                    dependencyCheck(
+                        additionalArguments: '--scan ./ --disableYarnAudit --disableNodeAudit --format HTML --format JSON',
+                        odcInstallation: 'DP-Check'
+                    )
+                    dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
+                }
+            }
+            post {
+                always {
+                    script {
+                        def c = parseOwaspReport("${APP_DIR}/dependency-check-report.json")
+                        if (c.critical > 0 || c.high > 0)
+                            slackNotify('WARNING', "⚠️ *OWASP:* 🔴 Critical: *${c.critical}* | 🟠 High: *${c.high}*")
+                        else
+                            slackNotify('INFO', "✅ *OWASP:* لا ثغرات")
+                    }
+                }
+            }
+        }
+
+        stage('Trivy Filesystem Scan') {
+            steps {
+                dir("${APP_DIR}") {
+                    sh """
+                        trivy fs . \
+                          --format json \
+                          --output trivy-fs-report.json \
+                          --severity HIGH,CRITICAL \
+                          --exit-code 0
+                        trivy fs . --severity HIGH,CRITICAL
+                    """
+                    archiveArtifacts artifacts: 'trivy-fs-report.json', allowEmptyArchive: true
+                }
+            }
+            post {
+                always {
+                    script {
+                        def c = parseTrivyReport("${APP_DIR}/trivy-fs-report.json")
+                        if (c.critical > 0 || c.high > 0)
+                            slackNotify('WARNING', "⚠️ *Trivy FS:* 🔴 *${c.critical}* | 🟠 *${c.high}*")
+                        else
+                            slackNotify('INFO', "✅ *Trivy FS:* نظيف")
+                    }
+                }
+            }
+        }
+
+        stage('Docker Build') {
+            steps {
+                dir("${APP_DIR}") {
+                    withDockerRegistry(credentialsId: 'docker', toolName: 'docker') {
+                        sh """
+                            docker system prune -f
+                            docker build \
+                              --no-cache \
+                              --label "build.number=${BUILD_NUMBER}" \
+                              -t ${APP_NAME}:${BUILD_NUMBER} .
+                        """
+                    }
+                }
+            }
+            post {
+                success { slackNotify('INFO', "🐳 *Docker Build نجح* — `${APP_NAME}:${BUILD_NUMBER}`") }
+                failure { slackNotify('FAILURE', "🐳 *Docker Build فشل!*") }
+            }
+        }
+
+        stage('Docker Push') {
+            steps {
+                withDockerRegistry(credentialsId: 'docker', toolName: 'docker') {
+                    sh """
+                        docker tag ${APP_NAME}:${BUILD_NUMBER} ${IMAGE_TAG}
+                        docker tag ${APP_NAME}:${BUILD_NUMBER} ${DOCKER_USER}/${APP_NAME}:latest
+                        docker push ${IMAGE_TAG}
+                        docker push ${DOCKER_USER}/${APP_NAME}:latest
+                    """
+                }
+            }
+            post {
+                success { slackNotify('INFO', "📦 *Docker Push نجح* — `${IMAGE_TAG}`") }
+            }
+        }
+
+        stage('Trivy Image Scan') {
+            steps {
+                sh """
+                    trivy image \
+                      --format json \
+                      --output trivy-image-report.json \
+                      --severity HIGH,CRITICAL \
+                      --exit-code 0 \
+                      ${IMAGE_TAG}
+                    trivy image --severity HIGH,CRITICAL ${IMAGE_TAG}
+                """
+                archiveArtifacts artifacts: 'trivy-image-report.json', allowEmptyArchive: true
+            }
+            post {
+                always {
+                    script {
+                        def c = parseTrivyReport("trivy-image-report.json")
+                        if (c.critical > 0 || c.high > 0)
+                            slackNotify('WARNING', "⚠️ *Trivy Image:* 🔴 *${c.critical}* | 🟠 *${c.high}*")
+                        else
+                            slackNotify('INFO', "✅ *Trivy Image:* نظيفة")
+                    }
+                }
+            }
+        }
+
+        stage('Update Deployment Manifest') {
+            steps {
+                dir('Manifest-file') {
+                    withCredentials([string(credentialsId: 'github', variable: 'GITHUB_TOKEN')]) {
+                        sh """
+                            git config user.email "${GIT_USER_EMAIL}"
+                            git config user.name  "${GIT_USER_NAME}"
+                            sed -i "s|image: ${DOCKER_USER}/${APP_NAME}:.*|image: ${IMAGE_TAG}|g" deployment-backend.yml
+                            git add deployment-backend.yml
+                            git commit -m "ci: update ${APP_NAME} to build ${BUILD_NUMBER} [skip ci]"
+                            git push https://\${GITHUB_TOKEN}@github.com/${GIT_USER_NAME}/${GIT_REPO_NAME} HEAD:master
+                        """
+                    }
+                }
+            }
+            post {
+                success { slackNotify('INFO', "🔄 *GitOps Backend:* Manifest مُحدَّث ✨") }
+            }
+        }
+    }
+
+    post {
+        always {
+            sh "docker rmi ${IMAGE_TAG} ${APP_NAME}:${BUILD_NUMBER} || true"
+        }
+        success {
+            script {
+                def dur = currentBuild.durationString.replace(' and counting','')
+                slackNotify('SUCCESS',
+                    "✅ *Chess Backend Pipeline اكتمل!*\n" +
+                    "━━━━━━━━━━━━━━━━━━━━━━\n" +
+                    "📦 App: *${APP_NAME}* | Build: #${BUILD_NUMBER}\n" +
+                    "🏷️ Image: `${IMAGE_TAG}` | ⏱️ ${dur}\n" +
+                    "🔗 <${JENKINS_BASE_URL}/job/${JOB_NAME}/${BUILD_NUMBER}/|Details>\n" +
+                    "━━━━━━━━━━━━━━━━━━━━━━"
+                )
+                emailext(subject:"✅ [Jenkins] ${APP_NAME} Build #${BUILD_NUMBER} نجح",
+                    body:"<h2>✅ ${APP_NAME} Build #${BUILD_NUMBER} نجح</h2><p>Image: ${IMAGE_TAG}</p><p>Duration: ${dur}</p>",
+                    to:"${EMAIL_RECIPIENT}", mimeType:'text/html',
+                    attachmentsPattern:'trivy-image-report.json')
+            }
+        }
+        failure {
+            script {
+                slackNotify('FAILURE',
+                    "❌ *Chess Backend Pipeline فشل!*\n" +
+                    "Build: #${BUILD_NUMBER} | Stage: *${env.STAGE_NAME ?: 'Unknown'}*\n" +
+                    "🔗 <${JENKINS_BASE_URL}/job/${JOB_NAME}/${BUILD_NUMBER}/console|السجل>"
+                )
+                emailext(subject:"❌ [Jenkins] ${APP_NAME} Build #${BUILD_NUMBER} فشل",
+                    body:"<h2>❌ ${APP_NAME} Build #${BUILD_NUMBER} فشل</h2>",
+                    to:"${EMAIL_RECIPIENT}", mimeType:'text/html', attachLog:true)
+            }
+        }
+    }
+}
+
+// ── Helpers ──────────────────────────────────────────────
+def slackNotify(String type, String message) {
+    def colors = [STARTED:'#36a64f',SUCCESS:'#2eb886',FAILURE:'#e01e5a',WARNING:'#ecb22e',INFO:'#36c5f0']
+    slackSend(channel: env.SLACK_CHANNEL, color: colors[type] ?: '#808080',
+        message: "${message}\n_Job: ${env.JOB_NAME} | ${new Date().format('dd/MM/yyyy HH:mm')}_")
+}
+def parseTrivyReport(String path) {
+    def r=[critical:0,high:0]
+    try{if(fileExists(path)){def d=readJSON file:path;d.Results?.each{it.Vulnerabilities?.each{v->if(v.Severity=='CRITICAL')r.critical++;if(v.Severity=='HIGH')r.high++;}}}}catch(e){}
+    return r
+}
+def parseOwaspReport(String path) {
+    def r=[critical:0,high:0]
+    try{if(fileExists(path)){def d=readJSON file:path;d.dependencies?.each{it.vulnerabilities?.each{v->if(v.severity=='CRITICAL')r.critical++;if(v.severity=='HIGH')r.high++;}}}}catch(e){}
+    return r
+}

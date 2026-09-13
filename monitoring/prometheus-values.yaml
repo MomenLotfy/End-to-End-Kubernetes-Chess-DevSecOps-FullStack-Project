@@ -1,0 +1,75 @@
+# ============================================================
+# prometheus-values.yaml — قيم Helm لـ kube-prometheus-stack
+# يُثبَّت بالأمر:
+# helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \
+#   --namespace monitoring --create-namespace \
+#   -f monitoring/prometheus-values.yaml
+# ============================================================
+
+# ─── Grafana ─────────────────────────────────────────────────
+grafana:
+  enabled: true
+  adminPassword: "ChangeMe123!"    # ← غيّر كلمة المرور
+  service:
+    type: LoadBalancer             # يُنشئ LoadBalancer للوصول لـ Grafana
+  persistence:
+    enabled: true
+    size: 5Gi
+  # Dashboards جاهزة مسبقاً
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+      - name: default
+        orgId: 1
+        folder: ''
+        type: file
+        disableDeletion: false
+        options:
+          path: /var/lib/grafana/dashboards/default
+  dashboards:
+    default:
+      kubernetes-cluster:
+        gnetId: 7249
+        revision: 1
+        datasource: Prometheus
+      nginx-ingress:
+        gnetId: 9614
+        revision: 1
+        datasource: Prometheus
+
+# ─── Prometheus ──────────────────────────────────────────────
+prometheus:
+  enabled: true
+  prometheusSpec:
+    retention: 7d
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 10Gi
+    # مراقبة كل الـ namespaces
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+
+# ─── AlertManager ────────────────────────────────────────────
+alertmanager:
+  enabled: true
+  alertmanagerSpec:
+    storage:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 2Gi
+
+# ─── Node Exporter (مراقبة Worker Nodes) ─────────────────────
+nodeExporter:
+  enabled: true
+
+# ─── kube-state-metrics ──────────────────────────────────────
+kubeStateMetrics:
+  enabled: true

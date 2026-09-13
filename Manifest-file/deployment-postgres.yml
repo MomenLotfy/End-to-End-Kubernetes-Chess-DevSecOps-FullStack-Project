@@ -1,0 +1,151 @@
+# ============================================================
+# deployment-postgres.yml
+# PostgreSQL — StatefulSet + Service + PersistentVolumeClaim
+# ============================================================
+
+# ── Persistent Volume Claim ───────────────────────────────
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: chess-postgres-pvc
+  namespace: chess
+  labels:
+    app: chess-postgres
+spec:
+  accessModes:
+  - ReadWriteOnce
+  storageClassName: gp2        # AWS EBS default storage class
+  resources:
+    requests:
+      storage: 5Gi
+
+---
+# ── StatefulSet ───────────────────────────────────────────
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: chess-postgres
+  namespace: chess
+  labels:
+    app: chess-postgres
+    tier: database
+spec:
+  serviceName: chess-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: chess-postgres
+  template:
+    metadata:
+      labels:
+        app: chess-postgres
+        tier: database
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:16-alpine
+        ports:
+        - containerPort: 5432
+          name: postgres
+        env:
+        - name: POSTGRES_DB
+          valueFrom:
+            secretKeyRef:
+              name: chess-db-secret
+              key: db-name
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: chess-db-secret
+              key: db-user
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: chess-db-secret
+              key: db-password
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
+        volumeMounts:
+        - name: postgres-storage
+          mountPath: /var/lib/postgresql/data
+        - name: init-sql
+          mountPath: /docker-entrypoint-initdb.d
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          exec:
+            command: ["pg_isready", "-U", "chess_user", "-d", "chess_db"]
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          exec:
+            command: ["pg_isready", "-U", "chess_user", "-d", "chess_db"]
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: postgres-storage
+        persistentVolumeClaim:
+          claimName: chess-postgres-pvc
+      - name: init-sql
+        configMap:
+          name: chess-postgres-init
+
+---
+# ── Service ───────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: chess-postgres
+  namespace: chess
+  labels:
+    app: chess-postgres
+spec:
+  selector:
+    app: chess-postgres
+  ports:
+  - protocol: TCP
+    port: 5432
+    targetPort: 5432
+    name: postgres
+  type: ClusterIP      # داخلي فقط — Backend يصله من داخل الكتلة
+
+---
+# ── ConfigMap — SQL Init Script ───────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: chess-postgres-init
+  namespace: chess
+data:
+  001_init.sql: |
+    CREATE TABLE IF NOT EXISTS users (
+      id            SERIAL PRIMARY KEY,
+      username      VARCHAR(20)  UNIQUE NOT NULL,
+      email         VARCHAR(255) UNIQUE NOT NULL,
+      password_hash VARCHAR(255) NOT NULL,
+      created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS scores (
+      id               SERIAL PRIMARY KEY,
+      user_id          INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      username         VARCHAR(20) NOT NULL,
+      moves            INTEGER NOT NULL,
+      duration_seconds INTEGER NOT NULL,
+      winner           BOOLEAN NOT NULL,
+      game_mode        VARCHAR(20) DEFAULT 'local',
+      played_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_scores_winner    ON scores(winner);
+    CREATE INDEX IF NOT EXISTS idx_scores_moves     ON scores(moves);
+    CREATE INDEX IF NOT EXISTS idx_scores_user_id   ON scores(user_id);
+    CREATE INDEX IF NOT EXISTS idx_scores_played_at ON scores(played_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_users_email      ON users(email);
+    CREATE INDEX IF NOT EXISTS idx_users_username   ON users(username);

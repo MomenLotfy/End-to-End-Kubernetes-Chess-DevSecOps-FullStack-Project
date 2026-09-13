@@ -1,0 +1,174 @@
+/* ============================================================
+   index.css — Design System: "Premium Chess Club"
+   Design tokens (spacing/radius/shadow/typography) + global
+   keyframe animations. Colors live in SettingsContext (per
+   dark/light + board theme) and are applied inline via `C`,
+   but the structural tokens below are theme-agnostic and used
+   everywhere via CSS custom properties.
+   ============================================================ */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+:root {
+  /* type scale */
+  --font-display: "Playfair Display", Georgia, "Times New Roman", serif;
+  --font-ui: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+
+  --fs-display: 2.4rem;
+  --fs-h1: 1.6rem;
+  --fs-h2: 1.15rem;
+  --fs-body: 0.92rem;
+  --fs-small: 0.8rem;
+  --fs-caption: 0.7rem;
+
+  /* spacing */
+  --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px; --sp-4: 16px;
+  --sp-5: 24px; --sp-6: 32px; --sp-7: 40px; --sp-8: 48px;
+
+  /* radius */
+  --r-sm: 6px; --r-md: 10px; --r-lg: 16px; --r-xl: 22px; --r-full: 999px;
+
+  /* shadows (neutral — themes layer color via inline styles when needed) */
+  --sh-sm: 0 2px 8px rgba(0,0,0,0.28);
+  --sh-md: 0 6px 22px rgba(0,0,0,0.38);
+  --sh-lg: 0 16px 48px rgba(0,0,0,0.5);
+  --sh-inset: inset 0 1px 2px rgba(0,0,0,0.35);
+
+  /* motion */
+  --ease: cubic-bezier(0.22, 0.8, 0.24, 1);
+  --ease-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --dur-fast: 140ms;
+  --dur-base: 220ms;
+  --dur-slow: 380ms;
+}
+
+html, body { height: 100%; }
+
+body {
+  font-family: var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition: background var(--dur-slow) var(--ease);
+}
+
+#root { min-height: 100vh; }
+
+button, input, textarea {
+  font-family: inherit;
+}
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(212,175,106,0.25); border-radius: var(--r-full); }
+::-webkit-scrollbar-thumb:hover { background: rgba(212,175,106,0.4); }
+
+/* ============================================================
+   Keyframe animation library — pure CSS, no external deps
+   ============================================================ */
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes modalPop {
+  from { opacity: 0; transform: scale(0.94) translateY(6px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes bannerSlide {
+  from { opacity: 0; transform: translateY(-10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes screenFade {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes toastSlide {
+  0%   { opacity: 0; transform: translate(-50%, -16px) scale(0.9); }
+  60%  { opacity: 1; transform: translate(-50%, 2px) scale(1.03); }
+  100% { opacity: 1; transform: translate(-50%, 0) scale(1); }
+}
+
+@keyframes checkPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(209,85,79,0.55), inset 0 0 18px rgba(209,85,79,0.35); }
+  50%      { box-shadow: 0 0 0 8px rgba(209,85,79,0), inset 0 0 24px rgba(209,85,79,0.55); }
+}
+
+@keyframes goldPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(212,175,106,0.45); }
+  50%      { box-shadow: 0 0 14px 3px rgba(212,175,106,0.55); }
+}
+
+@keyframes pieceSettle {
+  0%   { transform: scale(0.55); opacity: 0.4; }
+  60%  { transform: scale(1.12); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+@keyframes captureFade {
+  from { opacity: 0; transform: scale(0.6) translateY(4px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes hintRing {
+  0%   { opacity: 0; transform: scale(0.7); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes breathe {
+  0%, 100% { opacity: 0.5; transform: scale(1); }
+  50%      { opacity: 1; transform: scale(1.06); }
+}
+
+@keyframes sparkleFloat {
+  0%, 100% { transform: translateY(0) rotate(0deg); opacity: 0.5; }
+  50%      { transform: translateY(-6px) rotate(8deg); opacity: 0.9; }
+}
+
+.cm-fade-in     { animation: fadeIn var(--dur-base) var(--ease) both; }
+.cm-modal-pop   { animation: modalPop var(--dur-base) var(--ease) both; }
+.cm-banner      { animation: bannerSlide var(--dur-base) var(--ease) both; }
+.cm-screen      { animation: screenFade var(--dur-slow) var(--ease) both; }
+.cm-toast       { animation: toastSlide 480ms var(--ease-bounce) both; }
+.cm-check-pulse { animation: checkPulse 1.4s ease-in-out infinite; }
+.cm-gold-pulse  { animation: goldPulse 1.8s ease-in-out infinite; }
+.cm-piece       { animation: pieceSettle 260ms var(--ease-bounce) both; }
+.cm-capture-fade{ animation: captureFade var(--dur-base) var(--ease) both; }
+.cm-hint-ring   { animation: hintRing var(--dur-base) var(--ease) both; }
+.cm-breathe     { animation: breathe 1.6s ease-in-out infinite; }
+.cm-sparkle     { animation: sparkleFloat 3.2s ease-in-out infinite; }
+
+/* Interactive base — hover lift / active press, theme-agnostic */
+.cm-btn {
+  transition: transform var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease), opacity var(--dur-fast) var(--ease);
+}
+.cm-btn:hover:not(:disabled)   { transform: translateY(-1px); }
+.cm-btn:active:not(:disabled)  { transform: translateY(0) scale(0.97); }
+.cm-btn:disabled               { opacity: 0.45; cursor: default; transform: none; }
+
+.cm-chip {
+  transition: transform var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.cm-chip:hover { transform: translateY(-1px); }
+
+.cm-square { transition: background var(--dur-fast) var(--ease); }
+
+.cm-card {
+  transition: transform var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+.cm-card:hover { transform: translateY(-2px); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

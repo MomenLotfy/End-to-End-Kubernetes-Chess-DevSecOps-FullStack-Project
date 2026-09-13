@@ -108,7 +108,7 @@ export default function AIPlay({ token, onExit }) {
         <span style={{ fontSize: "var(--fs-caption)", color: C.txMut }}>{myColor === "w" ? "You: White" : "You: Black"}</span>
       </div>
 
-      {thinking && <div className="cm-breathe" style={{ fontSize: "var(--fs-caption)", color: C.gold }}>🤔 Computer is thinking...</div>}
+{/* Thinking indicator removed */}
 
       <CapturedPieces label="White takes" pieces={game.capt.w} />
       <ChessBoard board={game.board} sel={game.sel} mvSet={game.mvSet} lastMv={game.lastMv} ckKing={game.ckKing} onSquareClick={handleClick} hint={hint} />

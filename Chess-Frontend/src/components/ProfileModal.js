@@ -1,9 +1,11 @@
+// src/components/ProfileModal.js
 import { useState, useEffect } from "react";
 import { useSettings } from "../contexts/SettingsContext";
 import { getProfile, updateProfile, getMyStats, getMyHistory, getMyAchievements, uploadAvatar } from "../api/client";
 import StatsChart from "./StatsChart";
 import ReplayModal from "./ReplayModal";
 import Button from "./ui/Button";
+import Icon from "./ui/Icon";
 
 // ============================================================
 // components/ProfileModal.js — صفحة الملف الشخصي (Profile Page)
@@ -51,7 +53,7 @@ export default function ProfileModal({ token, onClose }) {
       <div className="cm-modal-pop" style={{ background: `linear-gradient(155deg, ${C.surfaceHover}, ${C.modalBg})`, border: `1px solid ${C.border}`, borderRadius: "var(--r-xl)", padding: "26px", width: "400px", maxWidth: "94vw", maxHeight: "85vh", overflowY: "auto", display: "flex", flexDirection: "column", gap: "16px", boxShadow: "var(--sh-lg)" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div style={{ fontFamily: "var(--font-display)", fontSize: "var(--fs-h1)", fontWeight: 700, color: C.gold }}>Profile</div>
-          <button onClick={onClose} style={{ background: "transparent", border: "none", color: C.txMut, fontSize: "1.2rem", cursor: "pointer" }}>✕</button>
+          <button onClick={onClose} style={{ background: "transparent", border: "none", color: C.txMut, fontSize: "1.2rem", cursor: "pointer" }}><Icon name="back" size={24} /></button>
         </div>
 
         {loading ? (
@@ -64,7 +66,7 @@ export default function ProfileModal({ token, onClose }) {
               <label style={{ width: "64px", height: "64px", borderRadius: "50%", background: `radial-gradient(circle at 32% 28%, ${C.wood}, ${C.woodDk})`, border: `2px solid ${C.gold}`, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", flexShrink: 0, cursor: "pointer", position: "relative", boxShadow: "var(--sh-sm)" }} title="Click to change avatar">
                 {profile.avatar_url
                   ? <img src={profile.avatar_url} alt="avatar" style={{ width: "100%", height: "100%", objectFit: "cover" }} onError={e => { e.target.style.display = "none"; }} />
-                  : <span style={{ fontSize: "1.6rem" }}>♞</span>}
+                  : <span style={{ fontSize: "1.6rem" }}><Icon name="chess" size={24} /></span>}
                 <input type="file" accept="image/*" onChange={onAvatarPick} style={{ display: "none" }} />
                 {uploading && <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "0.6rem", color: "#fff" }}>...</div>}
               </label>

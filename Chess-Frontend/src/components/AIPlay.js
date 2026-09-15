@@ -1,3 +1,4 @@
+// src/components/AIPlay.js
 import { useState, useEffect, useRef } from "react";
 import { useSettings } from "../contexts/SettingsContext";
 import { saveScore } from "../api/client";
@@ -9,6 +10,7 @@ import CapturedPieces from "./CapturedPieces";
 import GameStatusBar from "./GameStatusBar";
 import PromotionModal from "./PromotionModal";
 import Button from "./ui/Button";
+import Icon from "./ui/Icon";
 import Chip from "./ui/Chip";
 
 const DIFFICULTIES = [
@@ -40,7 +42,7 @@ export default function AIPlay({ token, onExit }) {
   const isAiTurn = started && game.turn === aiColor && !game.promo && !game.status?.match(/checkmate|stalemate|timeout/);
 
   useEffect(() => {
-    if (!isAiTurn || aiMovingRef.current) return;
+    if (!isAiTurn && aiMovingRef.current) return;
     aiMovingRef.current = true;
     const fen = boardToFEN(game.board, game.turn, game.cast, game.ep, game.hist);
     requestMove(fen, { skillLevel: difficulty.skillLevel, movetimeMs: difficulty.movetimeMs }).then(mv => {
@@ -75,27 +77,26 @@ export default function AIPlay({ token, onExit }) {
       <div className="cm-screen" style={{ minHeight: "100vh", background: C.bgGradient || C.bg, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "24px", fontFamily: "var(--font-ui)" }}>
         <div style={{ textAlign: "center" }}>
           <div style={{ fontFamily: "var(--font-display)", fontSize: "var(--fs-display)", fontWeight: 800, color: C.tx, letterSpacing: "0.02em" }}>Vs Computer</div>
-          <div style={{ fontSize: "var(--fs-caption)", color: C.txMut, letterSpacing: "0.2em", textTransform: "uppercase", marginTop: "4px" }}>Powered by Stockfish</div>
+          <div style={{ fontSize: "var(--fs-caption)", color: C.txMut, letterSpacing: "0.2em", marginTop: "4px" }}>Powered by Stockfish</div>
         </div>
 
         <div className="cm-card" style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: "var(--r-xl)", padding: "28px 32px", display: "flex", flexDirection: "column", alignItems: "center", gap: "20px", boxShadow: "var(--sh-lg)", width: "100%", maxWidth: "380px" }}>
           <div style={{ width: "100%" }}>
-            <div style={{ fontSize: "var(--fs-caption)", color: C.txMut, letterSpacing: "0.14em", textTransform: "uppercase", textAlign: "center", marginBottom: "10px" }}>Difficulty</div>
+            <div style={{ fontSize: "var(--fs-caption)", color: C.txMut, letterSpacing: "0.14em", textTransform: "uppercase", marginBottom: "10px" }}>Difficulty</div>
             <div style={{ display: "flex", gap: "8px", justifyContent: "center" }}>
               {DIFFICULTIES.map(d => <Chip key={d.key} active={difficulty.key === d.key} onClick={() => setDifficulty(d)}>{d.label}</Chip>)}
             </div>
           </div>
 
-          <div style={{ display: "flex", gap: "10px", width: "100%" }}>
+          <div style={{ display: "flex", gap: "10px", width: "100%", flexWrap: "wrap" }}>
             <Button variant="secondary" style={{ flex: 1 }} onClick={() => startGame("w")}>White</Button>
-            <Button variant="primary" style={{ flex: 1 }} onClick={() => startGame("random")}>🎲 Random</Button>
+            <Button variant="primary" style={{ flex: 1 }} onClick={() => startGame("random")}><Icon name="dice" size={24} /> Random</Button>
             <Button variant="secondary" style={{ flex: 1 }} onClick={() => startGame("b")}>Black</Button>
           </div>
 
           {engineError && <div style={{ color: C.danger, fontSize: "var(--fs-caption)", textAlign: "center" }}>{engineError} — check your internet connection (the engine loads from a CDN).</div>}
         </div>
-
-        <Button variant="ghost" size="sm" onClick={onExit}>← Back to Menu</Button>
+        <Button variant="ghost" size="sm" onClick={onExit}><Icon name="back" size={24} /> MENU</Button>
       </div>
     );
   }
@@ -103,12 +104,12 @@ export default function AIPlay({ token, onExit }) {
   return (
     <div className="cm-screen" style={{ minHeight: "100vh", background: C.bgGradient || C.bg, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", fontFamily: "var(--font-ui)", padding: "14px", gap: "10px" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", maxWidth: "510px" }}>
-        <div onClick={onExit} className="cm-btn" style={{ color: C.txMut, cursor: "pointer", fontSize: "var(--fs-caption)", fontWeight: 600 }}>← MENU</div>
-        <div style={{ fontFamily: "var(--font-display)", fontSize: "1.05rem", fontWeight: 700, color: C.tx }}>♞ vs Computer <span style={{ color: C.txMut, fontWeight: 400, fontSize: "var(--fs-caption)" }}>({difficulty.label})</span></div>
+        <div onClick={onExit} className="cm-btn" style={{ color: C.txMut, cursor: "pointer", fontSize: "var(--fs-caption)", fontWeight: 600 }}><Icon name="back" size={24} /> MENU</div>
+        <div style={{ fontFamily: "var(--font-display)", fontSize: "1.05rem", fontWeight: 700, color: C.tx }}><Icon name="chess" size={24} /> vs Computer <span style={{ color: C.txMut, fontWeight: 400, fontSize: "var(--fs-caption)" }}>({difficulty.label})</span></div>
         <span style={{ fontSize: "var(--fs-caption)", color: C.txMut }}>{myColor === "w" ? "You: White" : "You: Black"}</span>
       </div>
 
-{/* Thinking indicator removed */}
+      {/* Thinking indicator removed */}
 
       <CapturedPieces label="White takes" pieces={game.capt.w} />
       <ChessBoard board={game.board} sel={game.sel} mvSet={game.mvSet} lastMv={game.lastMv} ckKing={game.ckKing} onSquareClick={handleClick} hint={hint} />

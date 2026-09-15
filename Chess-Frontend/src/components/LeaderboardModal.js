@@ -1,6 +1,8 @@
+// src/components/LeaderboardModal.js
 import { useState, useEffect } from "react";
 import { useSettings } from "../contexts/SettingsContext";
 import { getLeaderboard, getEloLeaderboard } from "../api/client";
+import Icon from "./ui/Icon";
 
 // ============================================================
 // components/LeaderboardModal.js — نافذة لوحة الصدارة
@@ -18,16 +20,32 @@ export default function LeaderboardModal({ onClose }) {
     fetcher.then(d => { if (tab === "scores") setScores(d.scores || []); else setEloPlayers(d.players || []); setLoading(false); }).catch(() => setLoading(false));
   }, [tab]);
 
-  const tabStyle = (active) => ({ padding: "7px 16px", borderRadius: "var(--r-full)", cursor: "pointer", fontSize: "var(--fs-small)", fontWeight: 600, border: `1px solid ${active ? "transparent" : C.border}`, background: active ? `linear-gradient(180deg, ${C.accentHv}, ${C.accent})` : "transparent", color: active ? "#fff8ec" : C.txMut });
-  const rankIcon = (i) => i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `${i + 1}`;
+  const tabStyle = (active) => ({
+    padding: "7px 16px",
+    borderRadius: "var(--r-full)",
+    cursor: "pointer",
+    fontSize: "var(--fs-small)",
+    fontWeight: 600,
+    border: `1px solid ${active ? "transparent" : C.border}`,
+    background: active ? `linear-gradient(180deg, ${C.accentHv}, ${C.accent})` : "transparent",
+    color: active ? "#fff8ec" : C.txMut,
+  });
+
+  const rankIcon = (i) => {
+    if (i === 0) return <Icon name="medal" size={24} />;
+    if (i === 1) return <Icon name="crown" size={24} />;
+    if (i === 2) return <Icon name="diamond" size={24} />;
+    return `${i + 1}`;
+  };
+
   const rowStyle = { display: "grid", gap: "8px", padding: "10px 14px", background: C.pnl, border: `1px solid ${C.pnlBd}`, borderRadius: "var(--r-md)", alignItems: "center" };
 
   return (
     <div className="cm-fade-in" onClick={e => e.target === e.currentTarget && onClose()} style={{ position: "fixed", inset: 0, background: "rgba(6,4,2,0.8)", backdropFilter: "blur(3px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 999, padding: "14px" }}>
       <div className="cm-modal-pop" style={{ background: `linear-gradient(155deg, ${C.surfaceHover}, ${C.modalBg})`, border: `1px solid ${C.border}`, borderRadius: "var(--r-xl)", padding: "26px", width: "400px", maxWidth: "94vw", maxHeight: "80vh", display: "flex", flexDirection: "column", gap: "14px", boxShadow: "var(--sh-lg)" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div style={{ fontFamily: "var(--font-display)", fontSize: "var(--fs-h1)", fontWeight: 700, color: C.gold }}>🏆 Leaderboard</div>
-          <button onClick={onClose} style={{ background: "transparent", border: "none", color: C.txMut, fontSize: "1.2rem", cursor: "pointer" }}>✕</button>
+          <div style={{ fontFamily: "var(--font-display)", fontSize: "var(--fs-h1)", fontWeight: 700, color: C.gold }}><Icon name="chess-cup" size={24} /> Leaderboard</div>
+          <button onClick={onClose} style={{ background: "transparent", border: "none", color: C.txMut, fontSize: "1.2rem", cursor: "pointer" }}><Icon name="back" size={24} /></button>
         </div>
 
         <div style={{ display: "flex", gap: "8px" }}>

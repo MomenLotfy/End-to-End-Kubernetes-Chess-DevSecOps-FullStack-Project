@@ -1,0 +1,75 @@
+version: '3.8'
+
+services:
+  chess-postgres:
+    image: postgres:16-alpine
+    container_name: chess-postgres
+    restart: unless-stopped
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_DB: chess_db
+      POSTGRES_USER: chess_user
+      POSTGRES_PASSWORD: chess_password
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chess_user -d chess_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  chess-migration:
+    build:
+      context: ./Database/migrations
+      dockerfile: Dockerfile
+    container_name: chess-migration
+    environment:
+      - DB_HOST=chess-postgres
+      - DB_PORT=5432
+      - DB_NAME=chess_db
+      - DB_USER=chess_user
+      - DB_PASSWORD=chess_password
+    depends_on:
+      chess-postgres:
+        condition: service_healthy
+
+  chess-backend:
+    build:
+      context: ./Chess-Backend
+      dockerfile: Dockerfile
+    container_name: chess-backend
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    environment:
+      - NODE_ENV=production
+      - PORT=5000
+      - DB_HOST=chess-postgres
+      - DB_PORT=5432
+      - DB_NAME=chess_db
+      - DB_USER=chess_user
+      - DB_PASSWORD=chess_password
+      - JWT_SECRET=chess-jwt-secret-CHANGE-ME-IN-PRODUCTION
+      - JWT_EXPIRES=7d
+      - FRONTEND_URL=http://localhost:3000
+    depends_on:
+      chess-postgres:
+        condition: service_healthy
+      chess-migration:
+        condition: service_completed_successfully
+
+  chess-frontend:
+    build:
+      context: ./Chess-Frontend
+      dockerfile: Dockerfile
+    container_name: chess-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - chess-backend
+
+volumes:
+  postgres_data:

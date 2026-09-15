@@ -1,3 +1,4 @@
+// src/components/HomeScreen.js
 import { useState } from "react";
 import { useSettings } from "../contexts/SettingsContext";
 import AuthModal from "./AuthModal";
@@ -7,6 +8,7 @@ import ProfileModal from "./ProfileModal";
 import FriendsModal from "./FriendsModal";
 import TournamentsModal from "./TournamentsModal";
 import Button from "./ui/Button";
+import Icon from "./ui/Icon";
 import Chip from "./ui/Chip";
 import { Sparkle } from "./ui/Modal";
 
@@ -58,19 +60,19 @@ export default function HomeScreen({ user, token, onLogout, onAuthSuccess, onPla
       <div style={{ position: "fixed", top: "18px", right: "18px", display: "flex", gap: "10px", zIndex: 5 }}>
         {user ? (
           <>
-            <div className="cm-btn" style={iconBtn} onClick={() => setShowProfile(true)} title="Profile">👤</div>
-            <div className="cm-btn" style={iconBtn} onClick={() => setShowFriends(true)} title="Friends">👥</div>
-            <div className="cm-btn" style={iconBtn} onClick={onLogout} title="Logout">🚪</div>
+            <div className="cm-btn" style={iconBtn} onClick={() => setShowProfile(true)} title="Profile"><Icon name="profile" size={24} /></div>
+            <div className="cm-btn" style={iconBtn} onClick={() => setShowFriends(true)} title="Friends"><Icon name="friends" size={24} /></div>
+            <div className="cm-btn" style={iconBtn} onClick={onLogout} title="Logout"><Icon name="logout" size={24} /></div>
           </>
         ) : (
-          <div className="cm-btn" style={iconBtn} onClick={() => setShowAuth(true)} title="Sign In / Register">🔑</div>
+          <div className="cm-btn" style={iconBtn} onClick={() => setShowAuth(true)} title="Sign In / Register"><Icon name="login" size={24} /></div>
         )}
-        <div className="cm-btn" style={iconBtn} onClick={() => setShowSettings(true)} title="Settings">⚙</div>
+        <div className="cm-btn" style={iconBtn} onClick={() => setShowSettings(true)} title="Settings"><Icon name="chess-strategy" size={24} /></div>
       </div>
 
       {/* top-left brand mark */}
       <div style={{ position: "fixed", top: "18px", left: "22px", display: "flex", alignItems: "center", gap: "8px", zIndex: 5 }}>
-        <span style={{ fontSize: "1.3rem", color: C.gold }}>♞</span>
+        <span style={{ fontSize: "1.3rem", color: C.gold }}><Icon name="chess-logo" size={72} /></span>
         <span style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: "0.95rem", color: C.tx, letterSpacing: "0.08em" }}>CHESS MASTER</span>
       </div>
 
@@ -97,17 +99,17 @@ export default function HomeScreen({ user, token, onLogout, onAuthSuccess, onPla
         </div>
 
         <div style={{ display: "flex", gap: "10px", width: "100%", flexWrap: "wrap" }}>
-          <Button variant="secondary" style={{ flex: 1, minWidth: "120px" }} onClick={onPlayAI}>Vs Computer</Button>
-          <Button variant="primary" style={{ flex: 1, minWidth: "120px" }} onClick={() => onPlayLocal(timeControl.minutes)}>Play Local</Button>
-          <Button variant="secondary" style={{ flex: 1, minWidth: "120px" }} onClick={onPlayOnline}>Play Online</Button>
+          <Button variant="secondary" style={{ flex: 1, minWidth: "120px", display: "flex", alignItems: "center", justifyContent: "center", gap: "4px" }} onClick={onPlayAI}><Icon name="chess" size={24} />Vs Computer</Button>
+          <Button variant="primary" style={{ flex: 1, minWidth: "120px", display: "flex", alignItems: "center", justifyContent: "center", gap: "4px" }} onClick={() => onPlayLocal(timeControl.minutes)}><Icon name="chess" size={24} />Play Local</Button>
+          <Button variant="secondary" style={{ flex: 1, minWidth: "120px", display: "flex", alignItems: "center", justifyContent: "center", gap: "4px" }} onClick={onPlayOnline}><Icon name="online-chess" size={24} />Play Online</Button>
         </div>
       </div>
 
       {/* quick links row */}
       <div style={{ display: "flex", gap: "20px" }}>
-        <div style={linkChip} onClick={() => setShowLeaderboard(true)}><div style={linkIcon}>🏆</div>Leaderboard</div>
-        <div style={linkChip} onClick={() => setShowTournaments(true)}><div style={linkIcon}>🏅</div>Tournaments</div>
-        <div style={linkChip} onClick={() => user ? setShowFriends(true) : setShowAuth(true)}><div style={linkIcon}>👥</div>Friends</div>
+        <div style={linkChip} onClick={() => setShowLeaderboard(true)}><Icon name="chess-cup" size={46} />Leaderboard</div>
+        <div style={linkChip} onClick={() => setShowTournaments(true)}><Icon name="knock-out-stage" size={46} />Tournaments</div>
+        <div style={linkChip} onClick={() => user ? setShowFriends(true) : setShowAuth(true)}><Icon name="friends" size={46} />Friends</div>
       </div>
 
       {!user && <div style={{ fontSize: "var(--fs-caption)", color: C.txFaint, textAlign: "center", maxWidth: "260px" }}>Sign in to save your scores, climb the ELO leaderboard, and challenge friends.</div>}

@@ -1,7 +1,9 @@
+// src/components/FriendsModal.js
 import { useState, useEffect } from "react";
 import { useSettings } from "../contexts/SettingsContext";
 import { getFriends, getFriendRequests, sendFriendRequest, acceptFriendRequest, declineFriendRequest, removeFriend, getMyAchievements } from "../api/client";
 import { ACHIEVEMENT_INFO } from "../constants/achievements";
+import Icon from "./ui/Icon";
 import Button from "./ui/Button";
 
 // ============================================================
@@ -41,6 +43,15 @@ export default function FriendsModal({ token, onClose }) {
   const inputStyle = { flex: 1, padding: "10px 14px", background: C.pnl, border: `1px solid ${C.pnlBd}`, borderRadius: "var(--r-md)", color: C.tx, fontSize: "var(--fs-small)", fontFamily: "var(--font-ui)", outline: "none" };
   const rowStyle = { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 14px", background: C.pnl, border: `1px solid ${C.pnlBd}`, borderRadius: "var(--r-md)" };
 
+  // Prepare achievements list: use fetched achievements if available, otherwise fallback to static info
+  const allAchievements = achievements.length ? achievements : Object.entries(ACHIEVEMENT_INFO).map(([key, v]) => ({
+    key,
+    name: v.name,
+    icon: v.icon,
+    description: "",
+    earned_at: null,
+  }));
+
   return (
     <div className="cm-fade-in" onClick={e => e.target === e.currentTarget && onClose()} style={{ position: "fixed", inset: 0, background: "rgba(6,4,2,0.8)", backdropFilter: "blur(3px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 999, padding: "14px" }}>
       <div className="cm-modal-pop" style={{
@@ -53,9 +64,11 @@ export default function FriendsModal({ token, onClose }) {
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
             <div style={{ display: "flex", gap: "8px" }}>
               <div style={tabStyle(tab === "friends")} onClick={() => setTab("friends")}>♜ Friends</div>
-              <div style={tabStyle(tab === "requests")} onClick={() => setTab("requests")}>Pending {requests.length > 0 && `(${requests.length})`}</div>
+              <div style={tabStyle(tab === "requests")} onClick={() => setTab("requests")}>
+                Pending {requests.length > 0 && `(${requests.length})`}
+              </div>
             </div>
-            <button onClick={onClose} style={{ background: "transparent", border: "none", color: C.txMut, fontSize: "1.2rem", cursor: "pointer" }}>✕</button>
+            <button onClick={onClose} style={{ background: "transparent", border: "none", color: C.txMut, fontSize: "1.2rem", cursor: "pointer" }}><Icon name="back" size={24} /></button>
           </div>
 
           <div style={{ display: "flex", gap: "8px", marginBottom: "8px" }}>
@@ -109,7 +122,7 @@ export default function FriendsModal({ token, onClose }) {
         <div style={{ flex: "1 1 280px", padding: "24px", overflowY: "auto", maxHeight: "86vh" }}>
           <div style={{ fontFamily: "var(--font-display)", fontSize: "var(--fs-h1)", fontWeight: 700, color: C.gold, marginBottom: "16px" }}>Achievements</div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
-            {(achievements.length ? achievements : Object.entries(ACHIEVEMENT_INFO).map(([key, v]) => ({ key, name: v.name, icon: v.icon, description: "", earned_at: null }))).map(a => (
+            {allAchievements.map(a => (
               <div key={a.key} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "8px", textAlign: "center", opacity: a.earned_at ? 1 : 0.35 }}>
                 <div style={{
                   width: "58px", height: "58px", borderRadius: "50%",

@@ -1,5 +1,7 @@
+// src/components/ChatPanel.js
 import { useState, useRef, useEffect } from "react";
 import { useSettings } from "../contexts/SettingsContext";
+import Icon from "./ui/Icon";
 
 // ============================================================
 // components/ChatPanel.js — شات داخل اللعبة (Game Chat)
@@ -26,7 +28,7 @@ export default function ChatPanel({ messages, onSend, disabled, compact = false 
       borderRadius: "var(--r-lg)", display: "flex", flexDirection: "column", boxShadow: "var(--sh-md)",
       height: compact ? "auto" : "100%",
     }}>
-      <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}`, fontFamily: "var(--font-display)", fontWeight: 700, fontSize: "var(--fs-h2)", color: C.gold, letterSpacing: "0.04em" }}>Game Chat</div>
+      <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}`, fontFamily: "var(--font-display)", fontWeight: 700, fontSize: "var(--fs-h2)", color: C.gold, letterSpacing: "0.04em" }}><Icon name="chat" size={24} /> Game Chat</div>
 
       <div ref={listRef} style={{ flex: 1, minHeight: compact ? "70px" : "220px", maxHeight: compact ? "90px" : "340px", overflowY: "auto", padding: "12px 16px", display: "flex", flexDirection: "column", gap: "10px" }}>
         {messages.length === 0

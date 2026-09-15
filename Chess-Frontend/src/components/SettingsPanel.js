@@ -1,7 +1,9 @@
+// src/components/SettingsPanel.js
 import { useSettings } from "../contexts/SettingsContext";
 import { APP_THEME_LIST } from "../constants/appThemes";
 import { BOARD_THEME_LIST, BOARD_THEMES } from "../constants/boardThemes";
 import { PIECE_STYLE_LIST } from "../constants/pieceStyles";
+import Icon from "./ui/Icon";
 
 // ============================================================
 // components/SettingsPanel.js — المظهر والصوت
@@ -42,7 +44,7 @@ export default function SettingsPanel({ onClose }) {
           <div style={{ fontSize: "var(--fs-small)", color: PAPER.inkMut, marginTop: "4px" }}>Customize your game experience.</div>
         </div>
 
-        <button onClick={onClose} style={{ position: "absolute", top: "18px", right: "18px", background: "transparent", border: "none", color: PAPER.inkMut, fontSize: "1.3rem", cursor: "pointer" }}>✕</button>
+        <button onClick={onClose} style={{ position: "absolute", top: "18px", right: "18px", background: "transparent", border: "none", color: PAPER.inkMut, fontSize: "1.3rem", cursor: "pointer" }}><Icon name="back" size={24} /></button>
 
         <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
           <div style={section}>

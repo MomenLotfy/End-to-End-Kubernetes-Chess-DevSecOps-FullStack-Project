@@ -1,9 +1,11 @@
+// src/components/ReplayModal.js
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useSettings } from "../contexts/SettingsContext";
 import { getGameMoves } from "../api/client";
 import { replayToSnapshots } from "../engine/chessEngine";
 import ChessBoard from "./ChessBoard";
 import Button from "./ui/Button";
+import Icon from "./ui/Icon";
 
 // ============================================================
 // components/ReplayModal.js — إعادة مشاهدة لعبة محفوظة (Game Replay)
@@ -60,7 +62,7 @@ export default function ReplayModal({ gameId, onClose }) {
       <div className="cm-modal-pop" style={{ background: `linear-gradient(155deg, ${C.surfaceHover}, ${C.modalBg})`, border: `1px solid ${C.border}`, borderRadius: "var(--r-xl)", padding: "20px", display: "flex", flexDirection: "column", alignItems: "center", gap: "14px", maxHeight: "92vh", overflowY: "auto", boxShadow: "var(--sh-lg)" }}>
         <div style={{ display: "flex", justifyContent: "space-between", width: "100%", alignItems: "center" }}>
           <span style={{ color: C.gold, fontWeight: 700, fontFamily: "var(--font-display)", fontSize: "var(--fs-h2)" }}>▶ Game Replay</span>
-          <button onClick={onClose} style={{ background: "transparent", border: "none", color: C.txMut, fontSize: "1.2rem", cursor: "pointer" }}>✕</button>
+          <button onClick={onClose} style={{ background: "transparent", border: "none", color: C.txMut, fontSize: "1.2rem", cursor: "pointer" }}><Icon name="back" size={24} /></button>
         </div>
 
         <ChessBoard board={snapshots[step]} sel={null} mvSet={new Set()} lastMv={null} ckKing={null} onSquareClick={() => {}} />

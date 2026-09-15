@@ -1,4 +1,6 @@
+// src/components/ui/Modal.js
 import { useSettings } from "../../contexts/SettingsContext";
+import Icon from "./Icon";
 
 // ============================================================
 // components/ui/Modal.js — إطار موحّد لكل الـ modals
@@ -61,7 +63,9 @@ export function ModalHeader({ title, subtitle, onClose }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
         <h2 style={{ fontFamily: "var(--font-display)", fontSize: "var(--fs-h1)", fontWeight: 700, color: C.tx, letterSpacing: "0.02em" }}>{title}</h2>
         {onClose && (
-          <button onClick={onClose} className="cm-btn" style={{ background: "transparent", border: "none", color: C.txMut, fontSize: "1.3rem", cursor: "pointer", lineHeight: 1, padding: "2px 6px" }}>✕</button>
+          <button onClick={onClose} className="cm-btn" style={{ background: "transparent", border: "none", color: C.txMut, fontSize: "1.3rem", cursor: "pointer", lineHeight: 1, padding: "2px 6px" }}>
+            <Icon name="back" size={24} />
+          </button>
         )}
       </div>
       {subtitle && <div style={{ fontSize: "var(--fs-small)", color: C.txMut, marginTop: "4px" }}>{subtitle}</div>}

@@ -97,8 +97,19 @@ export default function useMultiplayer(myName, token) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [game.status]);
 
-  const createRoom = (name) => { setErrorMsg(""); socketRef.current?.emit("create_room", { playerName: name, token }); };
-  const joinRoom = (rid, name) => { setErrorMsg(""); setRoomId(rid); socketRef.current?.emit("join_room", { roomId: rid, playerName: name, token }); };
+  const createRoom = (name) => {
+    setErrorMsg("");
+    socketRef.current?.emit("create_room", { playerName: name });
+  };
+
+  const joinRoom = (rid, name) => {
+    setErrorMsg("");
+    setRoomId(rid);
+    socketRef.current?.emit("join_room", {
+      roomId: rid,
+      playerName: name,
+    });
+  };
   const resign = () => socketRef.current?.emit("resign", { roomId });
   const requestRematch = () => { socketRef.current?.emit("request_rematch", { roomId }); setRematchRequested(true); };
   const acceptRematch = () => socketRef.current?.emit("accept_rematch", { roomId });

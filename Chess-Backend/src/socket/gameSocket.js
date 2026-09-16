@@ -6,7 +6,6 @@
 // draw, winner, result and ELO — is derived and persisted server-side.
 // ============================================================
 const logger = require("../config/logger");
-const jwt = require("jsonwebtoken");
 const Game = require("../models/Game");
 const Move = require("../models/Move");
 const { computeNewRatings } = require("../utils/elo");
@@ -19,16 +18,6 @@ const { Chess } = require("chess.js");
 const activeRooms = new Map();
 
 // Decode JWT to get user id (if provided)
-const decodeUserId = (token) => {
-  if (!token) return null;
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || "chess-secret-key");
-    return decoded.id;
-  } catch {
-    return null;
-  }
-};
-
 const cleanPlayerName = (name) => (typeof name === "string" ? name.trim().slice(0, 40) : "");
 
 // Generate a unique room identifier
@@ -126,13 +115,13 @@ const initSocket = (io) => {
     logger.info(`Socket connected: ${socket.id}`);
 
     // ── Create a new game room ────────────────────────
-    socket.on("create_room", async ({ playerName, token } = {}) => {
+    socket.on("create_room", async ({ playerName } = {}) => {
       const cleanName = cleanPlayerName(playerName);
       if (!cleanName) {
         return socket.emit("error", { message: "Invalid player name" });
       }
 
-      const userId = decodeUserId(token);
+      const userId = socket.userId ?? null;
       const roomId = generateRoomId();
       const chess = new Chess();
       const initialFen = chess.fen();
@@ -175,7 +164,7 @@ const initSocket = (io) => {
     });
 
     // ── Join an existing room ────────────────────────
-    socket.on("join_room", async ({ roomId, playerName, token } = {}) => {
+    socket.on("join_room", async ({ roomId, playerName } = {}) => {
       const room = activeRooms.get(roomId);
       if (!room) {
         return socket.emit("error", { message: "Room not found" });
@@ -192,7 +181,7 @@ const initSocket = (io) => {
         return socket.emit("error", { message: "Invalid player name" });
       }
 
-      const userId = decodeUserId(token);
+      const userId = socket.userId ?? null;
 
       // Persist FIRST. The WHERE clause (status='in_progress' AND
       // black_user_id IS NULL) is the real guard against two join_room

@@ -3,9 +3,11 @@
 // Express + Socket.io + PostgreSQL
 // ============================================================
 require("dotenv").config();
+
 const express    = require("express");
 const http       = require("http");
 const { Server } = require("socket.io");
+const { socketAuthMiddleware } = require("./socket/socketAuth");
 const helmet     = require("helmet");
 const cors       = require("cors");
 const morgan     = require("morgan");
@@ -22,71 +24,137 @@ const { initSocket }      = require("./socket/gameSocket");
 
 const app    = express();
 const server = http.createServer(app);
-const io     = new Server(server, {
+
+const io = new Server(server, {
   cors: {
     origin: process.env.FRONTEND_URL || "*",
-    methods: ["GET","POST"],
+    methods: ["GET", "POST"],
   },
 });
 
+// ─── Socket Authentication ───────────────────────────────
+// JWT is verified once when the Socket.IO connection is established.
+// Guest connections are allowed without a token.
+// Identity is bound to socket.userId.
+// Events must never receive or decode JWT tokens themselves.
+
+io.use(socketAuthMiddleware);
+
 // ─── Middleware ───────────────────────────────────────────
+
 app.use(helmet());
-app.use(cors({ origin: process.env.FRONTEND_URL || "*" }));
-app.use(morgan("combined", { stream: { write: m => logger.info(m.trim()) } }));
+
+app.use(
+  cors({
+    origin: process.env.FRONTEND_URL || "*",
+  })
+);
+
+app.use(
+  morgan("combined", {
+    stream: {
+      write: (m) => logger.info(m.trim()),
+    },
+  })
+);
+
 app.use(express.json());
 
-// ملفات الأفاتار المرفوعة (Avatar Upload) — لازم تكون accessible من الفرونت حتى لو على بورت مختلف
-app.use("/uploads", (req, res, next) => { res.header("Cross-Origin-Resource-Policy", "cross-origin"); next(); }, express.static(require("path").join(__dirname, "..", "uploads")));
+// ملفات الأفاتار المرفوعة (Avatar Upload)
+// لازم تكون accessible من الفرونت حتى لو على بورت مختلف
+app.use(
+  "/uploads",
+  (req, res, next) => {
+    res.header(
+      "Cross-Origin-Resource-Policy",
+      "cross-origin"
+    );
+    next();
+  },
+  express.static(
+    require("path").join(__dirname, "..", "uploads")
+  )
+);
 
-// Rate Limiting
+// ─── Rate Limiting ────────────────────────────────────────
+
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,   // 15 دقيقة
-  max: 100,                     // حد أقصى 100 طلب
-  message: { error: "Too many requests, please try again later." },
+  windowMs: 15 * 60 * 1000, // 15 دقيقة
+  max: 100,
+  message: {
+    error: "Too many requests, please try again later.",
+  },
 });
+
 app.use("/api/", limiter);
 
-// ─── Routes ──────────────────────────────────────────────
-app.use("/api/auth",        authRoutes);
+// ─── Routes ───────────────────────────────────────────────
+
+app.use("/api/auth", authRoutes);
 app.use("/api/leaderboard", leaderboardRoutes);
-app.use("/api/game",        gameRoutes);
-app.use("/api/friends",     friendsRoutes);
+app.use("/api/game", gameRoutes);
+app.use("/api/friends", friendsRoutes);
 app.use("/api/tournaments", tournamentRoutes);
 
-// Health Check
+// ─── Health Check ─────────────────────────────────────────
+
 app.get("/health", (req, res) => {
-  res.json({ status: "healthy", timestamp: new Date().toISOString() });
-});
-
-// 404 Handler
-app.use((req, res) => {
-  res.status(404).json({ error: "Route not found" });
-});
-
-// Error Handler
-app.use((err, req, res, next) => {
-  logger.error(`Error: ${err.message}`);
-  res.status(err.status || 500).json({
-    error: process.env.NODE_ENV === "production"
-      ? "Internal server error"
-      : err.message,
+  res.json({
+    status: "healthy",
+    timestamp: new Date().toISOString(),
   });
 });
 
-// ─── Socket.io ───────────────────────────────────────────
+// ─── 404 Handler ─────────────────────────────────────────
+
+app.use((req, res) => {
+  res.status(404).json({
+    error: "Route not found",
+  });
+});
+
+// ─── Error Handler ────────────────────────────────────────
+
+app.use((err, req, res, next) => {
+  logger.error(`Error: ${err.message}`);
+
+  res.status(err.status || 500).json({
+    error:
+      process.env.NODE_ENV === "production"
+        ? "Internal server error"
+        : err.message,
+  });
+});
+
+// ─── Socket.io ────────────────────────────────────────────
+
 initSocket(io);
 
 // ─── Start Server ─────────────────────────────────────────
+
 const PORT = process.env.PORT || 5000;
 
-connectDB().then(() => {
-  server.listen(PORT, () => {
-    logger.info(`Chess Backend running on port ${PORT}`);
-    logger.info(`Environment: ${process.env.NODE_ENV || "development"}`);
-  });
-}).catch(err => {
-  logger.error(`Database connection failed: ${err.message}`);
-  process.exit(1);
-});
+connectDB()
+  .then(() => {
+    server.listen(PORT, () => {
+      logger.info(
+        `Chess Backend running on port ${PORT}`
+      );
 
-module.exports = { app, server };
+      logger.info(
+        `Environment: ${process.env.NODE_ENV || "development"}`
+      );
+    });
+  })
+  .catch((err) => {
+    logger.error(
+      `Database connection failed: ${err.message}`
+    );
+
+    process.exit(1);
+  });
+
+module.exports = {
+  app,
+  server,
+};

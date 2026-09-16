@@ -2,7 +2,7 @@
 // models/Game.js — Game Model (PostgreSQL)
 // بديل تخزين الغرف في الميموري بس — كل لعبة بقت لها سطر دائم
 // ============================================================
-const { query } = require("../config/db");
+const { query, pool } = require("../config/db");
 
 const Game = {
 
@@ -64,6 +64,15 @@ const Game = {
     return res.rows[0] || null;
   },
 
+  // تحديث الفين بعد كل حركة (authoritative board)
+  async updateBoardFEN(roomId, fen) {
+    const res = await query(
+      `UPDATE games SET board_fen = $2 WHERE room_id = $1 RETURNING *`,
+      [roomId, fen]
+    );
+    return res.rows[0] || null;
+  },
+
   // إنهاء اللعبة عن طريق id مباشرة (local games مفيش لها room_id)
   async finishById(id, { result: gameResult, winnerColor }) {
     const res = await query(
@@ -86,6 +95,21 @@ const Game = {
       [userId, limit]
     );
     return result.rows;
+  },
+  // Run multiple DB operations in a single transaction
+  async runInTransaction(callback) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const result = await callback(client);
+      await client.query('COMMIT');
+      return result;
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
   },
 };
 

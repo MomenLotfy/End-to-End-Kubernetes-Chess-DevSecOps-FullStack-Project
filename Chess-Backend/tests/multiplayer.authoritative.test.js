@@ -1,6 +1,8 @@
 const http = require('http');
 const { Server } = require('socket.io');
 const clientIO = require('socket.io-client');
+const jwt = require('jsonwebtoken');
+const { socketAuthMiddleware } = require('../src/socket/socketAuth');
 
 jest.setTimeout(60000);
 
@@ -166,7 +168,7 @@ describe('Multiplayer server-authoritative flow', () => {
 
   const createRoom = (client, playerName = 'Alice') =>
     new Promise((resolve, reject) => {
-      client.emit('create_room', { playerName, token: null });
+      client.emit('create_room', { playerName });
       client.once('room_created', resolve);
       client.once('error', reject);
     });
@@ -183,7 +185,7 @@ describe('Multiplayer server-authoritative flow', () => {
       };
       client.once('game_start', onStart);
       client.once('error', onError);
-      client.emit('join_room', { roomId, playerName, token: null });
+      client.emit('join_room', { roomId, playerName });
     });
 
   // Registers "drain" listeners on every other participant BEFORE emitting
@@ -218,6 +220,7 @@ describe('Multiplayer server-authoritative flow', () => {
   beforeAll((done) => {
     httpServer = http.createServer();
     io = new Server(httpServer, { cors: { origin: '*' } });
+    io.use(socketAuthMiddleware);
     initSocket(io);
     httpServer.listen(() => {
       port = httpServer.address().port;
@@ -684,5 +687,135 @@ describe('Multiplayer server-authoritative flow', () => {
     client2.disconnect();
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(gameEndedSpy).not.toHaveBeenCalled();
+  });
+});
+
+/* ---------------------------------------------------------------------------
+ * Socket authentication middleware.
+ * Uses the exact same middleware wired in production server.js.
+ * ------------------------------------------------------------------------- */
+describe('Socket authentication middleware', () => {
+  let authHttpServer;
+  let authIo;
+  let authPort;
+
+  beforeAll((done) => {
+    authHttpServer = http.createServer();
+    authIo = new Server(authHttpServer, { cors: { origin: '*' } });
+
+    authIo.use(socketAuthMiddleware);
+
+    authIo.on('connection', (socket) => {
+      socket.emit('auth_identity', {
+        userId: socket.userId,
+        authenticated: socket.authenticated,
+      });
+    });
+
+    authHttpServer.listen(() => {
+      authPort = authHttpServer.address().port;
+      done();
+    });
+  });
+
+  afterAll((done) => {
+    authIo.close();
+    authHttpServer.close(done);
+  });
+
+  test('guest connection is allowed without a token', async () => {
+    const client = clientIO(`http://localhost:${authPort}`);
+
+    const identity = await new Promise((resolve, reject) => {
+      client.once('auth_identity', resolve);
+      client.once('connect_error', reject);
+    });
+
+    expect(identity).toEqual({
+      userId: null,
+      authenticated: false,
+    });
+
+    client.disconnect();
+  });
+
+  test('valid JWT binds its user id to socket.userId', async () => {
+    const userId = 'user-123';
+    const token = jwt.sign(
+      { id: userId },
+      process.env.JWT_SECRET || 'chess-secret-key'
+    );
+
+    const client = clientIO(`http://localhost:${authPort}`, {
+      auth: { token },
+    });
+
+    const identity = await new Promise((resolve, reject) => {
+      client.once('auth_identity', resolve);
+      client.once('connect_error', reject);
+    });
+
+    expect(identity).toEqual({
+      userId,
+      authenticated: true,
+    });
+
+    client.disconnect();
+  });
+
+  test('invalid JWT is rejected during the Socket.IO handshake', async () => {
+    const client = clientIO(`http://localhost:${authPort}`, {
+      auth: { token: 'this-is-not-a-valid-jwt' },
+    });
+
+    const error = await new Promise((resolve) => {
+      client.once('connect_error', resolve);
+    });
+
+    expect(error.message).toBe('Invalid authentication token');
+    expect(client.connected).toBe(false);
+
+    client.disconnect();
+  });
+
+  test('JWT without an id claim is rejected', async () => {
+    const token = jwt.sign(
+      { username: 'Alice' },
+      process.env.JWT_SECRET || 'chess-secret-key'
+    );
+
+    const client = clientIO(`http://localhost:${authPort}`, {
+      auth: { token },
+    });
+
+    const error = await new Promise((resolve) => {
+      client.once('connect_error', resolve);
+    });
+
+    expect(error.message).toBe('Invalid authentication token');
+    expect(client.connected).toBe(false);
+
+    client.disconnect();
+  });
+
+  test('expired JWT is rejected during the Socket.IO handshake', async () => {
+    const token = jwt.sign(
+      { id: 'expired-user' },
+      process.env.JWT_SECRET || 'chess-secret-key',
+      { expiresIn: -1 }
+    );
+
+    const client = clientIO(`http://localhost:${authPort}`, {
+      auth: { token },
+    });
+
+    const error = await new Promise((resolve) => {
+      client.once('connect_error', resolve);
+    });
+
+    expect(error.message).toBe('Invalid authentication token');
+    expect(client.connected).toBe(false);
+
+    client.disconnect();
   });
 });

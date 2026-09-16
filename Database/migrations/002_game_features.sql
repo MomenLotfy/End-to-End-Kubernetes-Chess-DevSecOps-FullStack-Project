@@ -21,7 +21,8 @@ CREATE TABLE IF NOT EXISTS games (
   game_mode       VARCHAR(20) NOT NULL DEFAULT 'local',  -- local | multiplayer | ai
   status          VARCHAR(20) NOT NULL DEFAULT 'in_progress', -- in_progress | finished | abandoned
   result          VARCHAR(20),                         -- checkmate | resign | timeout | draw | disconnect
-  winner_color    VARCHAR(1),                           -- 'w' | 'b' | NULL (draw)
+  winner_color    VARCHAR(1),
+  board_fen       TEXT,                           -- 'w' | 'b' | NULL (draw)
   started_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   ended_at        TIMESTAMP
 );

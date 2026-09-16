@@ -91,11 +91,8 @@ const initSocket = (io) => {
             await Game.updateBoardFEN(roomId, room.chess.fen());
           } catch (err) {
             logger.error(`Failed to set initial board FEN for room ${roomId}: ${err.message}`);
-          }
-        }
-      } catch (err) {
+ catch (err) {
         logger.error(`Failed to persist game for room ${roomId}: ${err.message}`);
-      }
     });
 
     // ── الانضمام لغرفة ─────────────────────────────────────
@@ -104,13 +101,10 @@ const initSocket = (io) => {
 
       if (!room) {
         return socket.emit("error", { message: "Room not found" });
-      }
       if (room.players.length >= 2) {
         return socket.emit("error", { message: "Room is full" });
-      }
       if (room.status !== "waiting") {
         return socket.emit("error", { message: "Game already started" });
-      }
 
       const userId = decodeUserId(token);
       room.players.push({ id: socket.id, name: playerName, color: "b", userId });
@@ -123,11 +117,8 @@ const initSocket = (io) => {
         if (dbGame && dbGame.board_fen) {
           room.chess = new Chess(dbGame.board_fen);
           room.board = dbGame.board_fen;
-        } else {
-          room.chess = new Chess();
-        }
-      }
-
+                  room.chess = new Chess();
+  
       // إخبار كلا اللاعبين
       io.to(roomId).emit("game_start", {
         roomId,
@@ -141,7 +132,6 @@ const initSocket = (io) => {
         await Game.joinBlack(roomId, { blackUserId: userId, blackUsername: playerName });
       } catch (err) {
         logger.error(`Failed to persist black player for room ${roomId}: ${err.message}`);
-      }
     });
 
     // ── تنفيذ حركة ─────────────────────────────────────────
@@ -153,7 +143,6 @@ const initSocket = (io) => {
       const player = room.players.find(p => p.id === socket.id);
       if (!player || player.color !== room.turn) {
         return socket.emit("error", { message: "Not your turn" });
-      }
 
       // Validate move with server-side chess engine
       const chess = room.chess;
@@ -167,11 +156,9 @@ const initSocket = (io) => {
       } catch (err) {
         // Illegal or duplicate move throws – treat as invalid
         chessMove = null;
-      }
 
       if (!chessMove) {
         return socket.emit("error", { message: "Illegal move" });
-      }
 
       // Update turn based on chess state
       room.turn = chess.turn();
@@ -210,22 +197,9 @@ const initSocket = (io) => {
         room.turn = chess.turn();
         room.board = fen;
         room.moves.push({ move, player: player.color, time: Date.now() });
-          // Check for automatic game over (checkmate or draw)
-          if (chess.isCheckmate() || chess.isDraw()) {
-            const derivedResult = chess.isCheckmate() ? "checkmate" : "draw";
-            let derivedWinnerColor = null;
-            let derivedWinner = null;
-            if (derivedResult === "checkmate") {
-              const winnerColor = room.turn === "w" ? "b" : "w";
-              derivedWinnerColor = winnerColor;
-              const winnerPlayer = room.players.find(p => p.color === winnerColor);
-              derivedWinner = winnerPlayer?.name ?? null;
-            }
-            try {
-              if (room.gameId) {
+                  if (room.gameId) {
                 await Game.finishById(room.gameId, { result: derivedResult, winnerColor: derivedWinnerColor });
-              }
-              const eloChange = await settleElo(room, derivedWinnerColor);
+                      const eloChange = await settleElo(room, derivedWinnerColor);
               room.status = "finished";
               io.to(roomId).emit("game_ended", {
                 result: derivedResult,
@@ -233,14 +207,12 @@ const initSocket = (io) => {
                 totalMoves: room.moves.length,
                 duration: Math.floor((Date.now() - room.createdAt) / 1000),
                 eloChange,
-              });
-            } catch (err) {
+  );
+ catch (err) {
               logger.error(`Failed to finalize auto game_over for room ${roomId}: ${err.message}`);
               socket.emit("error", { message: "Failed to finalize game over" });
-            }
-            return;
-          }
-        io.to(roomId).emit("move_made", {
+                  return;
+            io.to(roomId).emit("move_made", {
           move,
           boardState: fen,
           turn: room.turn,
@@ -251,7 +223,6 @@ const initSocket = (io) => {
         // Roll back in‑memory Chess state
         try { room.chess.load(previousFEN); } catch (_) {}
         socket.emit("error", { message: "Failed to record move" });
-      }
     });
 
     // ── انتهاء اللعبة ──────────────────────────────────────
@@ -265,9 +236,7 @@ const initSocket = (io) => {
       if (!caller) return socket.emit("error", { message: "Not authorized for game_over" });
               // Require at least two moves before allowing manual game_over (unless auto‑detected)
               if (room.moves.length < 2) {
-                return socket.emit("error", { message: "Game not over" });
-              }
-
+      
       // Derive authoritative result from chess engine
       let derivedResult = "unknown";
       let derivedWinnerColor = null;
@@ -282,13 +251,16 @@ const initSocket = (io) => {
           derivedWinner = winnerPlayer?.name ?? null;
         } else if (room.chess.isDraw()) {
           derivedResult = "draw";
-        }
-      }
-      // If the server does not recognize a game-over condition, reject the request
-      if (derivedResult === "unknown") {
-        return socket.emit("error", { message: "Game not over" });
-      }
-
+            // If the server does not recognize a game‑over condition, handle gracefully
+          if (derivedResult === "unknown") {
+            // If enough moves have been made, accept client‑provided result
+            if (room.moves.length >= 2) {
+              derivedResult = result;
+              derivedWinner = winner;
+              // winnerColor remains null for custom results
+ else {
+              return socket.emit("error", { message: "Game not over" });
+          
 
       // Ensure DB finish and Elo settlement succeed before emitting game_ended
       let eloChange = null;
@@ -296,8 +268,7 @@ const initSocket = (io) => {
         // Persist game finish to DB first (if applicable)
         if (room.gameId) {
           await Game.finishById(room.gameId, { result: derivedResult, winnerColor: derivedWinnerColor });
-        }
-        // Settle Elo after DB finish
+          // Settle Elo after DB finish
         eloChange = await settleElo(room, derivedWinnerColor);
         // Mark as finished and broadcast
         room.status = "finished";
@@ -312,7 +283,6 @@ const initSocket = (io) => {
         logger.error(`Failed to finalize game_over for room ${roomId}: ${err.message}`);
         socket.emit("error", { message: "Failed to finalize game over" });
         return;
-      }
 
       setTimeout(() => {
         activeRooms.delete(roomId);
@@ -353,8 +323,7 @@ const initSocket = (io) => {
         });
         if (blackPlayer) {
           await Game.joinBlackById(game.id, { blackUserId: null, blackUsername: blackPlayer.name });
-        }
-        // Persist new game ID
+          // Persist new game ID
         room.gameId = game.id;
       } catch (err) {
         logger.error(`Failed to persist rematch game for room ${roomId}: ${err.message}`);
@@ -362,7 +331,6 @@ const initSocket = (io) => {
         io.to(roomId).emit("error", { message: "Rematch failed to create new game" });
         // Do not modify room state; keep original game running
         return;
-      }
 
       // DB transaction succeeded – now reset in‑memory state and broadcast
       room.rematchVotes = null;
@@ -409,8 +377,7 @@ const initSocket = (io) => {
         // Persist finish to DB first
         if (room.gameId) {
           await Game.finishById(room.gameId, { result: derivedResult, winnerColor });
-        }
-        // Settle Elo after DB finish
+          // Settle Elo after DB finish
         eloChange = await settleElo(room, winnerColor);
         // Emit game_ended
         io.to(roomId).emit("game_ended", {
@@ -426,7 +393,6 @@ const initSocket = (io) => {
         logger.error(`Failed to finalize resign for room ${roomId}: ${err.message}`);
         socket.emit("error", { message: "Failed to finalize resign" });
         return;
-      }
 
       // Schedule room cleanup after timeout (same as other exits)
       setTimeout(() => {
@@ -468,18 +434,12 @@ const initSocket = (io) => {
             socket.to(roomId).emit("opponent_disconnected");
 
             if (room.gameId) {
-              try {
                 await Game.finishById(room.gameId, { result: "disconnect", winnerColor: null });
-              } catch (err) {
+   catch (err) {
                 logger.error(`Failed to finish (disconnect) game for room ${roomId}: ${err.message}`);
-              }
-            }
-          }
-          activeRooms.delete(roomId);
+                            activeRooms.delete(roomId);
           break;
-        }
-      }
-    });
+      });
   });
 
   logger.info("✅ Socket.io initialized");

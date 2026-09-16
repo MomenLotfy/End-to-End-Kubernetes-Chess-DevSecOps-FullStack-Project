@@ -50,42 +50,6 @@ const Game = {
     return result.rows[0] || null;
   },
 
-<<<<<<< HEAD
-=======
-  // إنهاء اللعبة عن طريق room_id (multiplayer)
-  async finish(roomId, { result: gameResult, winnerColor }) {
-    const res = await query(
-      `UPDATE games
-       SET status = 'finished', result = $2, winner_color = $3, ended_at = CURRENT_TIMESTAMP
-       WHERE room_id = $1
-       RETURNING *`,
-      [roomId, gameResult, winnerColor ?? null]
-    );
-    return res.rows[0] || null;
-  },
-
-  // تحديث الفين بعد كل حركة (authoritative board)
-  async updateBoardFEN(roomId, fen) {
-    const res = await query(
-      `UPDATE games SET board_fen = $2 WHERE room_id = $1 RETURNING *`,
-      [roomId, fen]
-    );
-    return res.rows[0] || null;
-  },
-
-  // إنهاء اللعبة عن طريق id مباشرة (local games مفيش لها room_id)
-  async finishById(id, { result: gameResult, winnerColor }) {
-    const res = await query(
-      `UPDATE games
-       SET status = 'finished', result = $2, winner_color = $3, ended_at = CURRENT_TIMESTAMP
-       WHERE id = $1
-       RETURNING *`,
-      [id, gameResult, winnerColor ?? null]
-    );
-    return res.rows[0] || null;
-  },
-
->>>>>>> fix/server-authoritative-game
   // آخر ألعاب مستخدم معيّن (لصفحة الـ Profile / Replay list)
   async getUserGames(userId, limit = 10) {
     const result = await query(
@@ -97,7 +61,6 @@ const Game = {
     );
     return result.rows;
   },
-<<<<<<< HEAD
 
   // ----------------------------------------------------------
   // Transaction-scoped writes — MUST be called with the `client` handed
@@ -188,22 +151,6 @@ const Game = {
       throw new Error(`Failed to update ELO for user ${userId}`);
     }
     return res.rows[0];
-=======
-  // Run multiple DB operations in a single transaction
-  async runInTransaction(callback) {
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      const result = await callback(client);
-      await client.query('COMMIT');
-      return result;
-    } catch (err) {
-      await client.query('ROLLBACK');
-      throw err;
-    } finally {
-      client.release();
-    }
->>>>>>> fix/server-authoritative-game
   },
 };
 

@@ -25,11 +25,10 @@ export default function useMultiplayer(myName, token) {
     socketRef.current.emit("make_move", {
       roomId,
       move: {
-        from: moveEntry.from, to: moveEntry.to, piece: moveEntry.piece,
-        captured: moveEntry.captured, promotion: moveEntry.promotion, san: moveEntry.san,
-      },
-      boardState: null,
-      turn: moveEntry.color === "w" ? "b" : "w",
+        from: moveEntry.from,
+        to: moveEntry.to,
+        promotion: moveEntry.promotion,
+      }
     });
   }, [roomId]);
 

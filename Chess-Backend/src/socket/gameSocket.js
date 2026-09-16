@@ -8,6 +8,7 @@ const Game   = require("../models/Game");
 const Move   = require("../models/Move");
 const User   = require("../models/User");
 const { computeNewRatings } = require("../utils/elo");
+const { Chess } = require("chess.js");
 
 // الغرف النشطة (state حي في الميموري لسرعة اللعب)
 // + بتتسجل بالتوازي في Postgres (games/moves) عشان متضعش لو السيرفر عمل restart
@@ -82,7 +83,16 @@ const initSocket = (io) => {
           gameMode:      "multiplayer",
         });
         const room = activeRooms.get(roomId);
-        if (room) room.gameId = game.id;
+        if (room) {
+          room.gameId = game.id;
+          // Initialize server-side Chess instance and store initial FEN
+          room.chess = new Chess();
+          try {
+            await Game.updateBoardFEN(roomId, room.chess.fen());
+          } catch (err) {
+            logger.error(`Failed to set initial board FEN for room ${roomId}: ${err.message}`);
+          }
+        }
       } catch (err) {
         logger.error(`Failed to persist game for room ${roomId}: ${err.message}`);
       }
@@ -107,6 +117,17 @@ const initSocket = (io) => {
       room.status = "playing";
       socket.join(roomId);
 
+      // Initialize server-side Chess instance from persisted FEN if needed
+      if (!room.chess) {
+        const dbGame = await Game.findByRoomId(roomId);
+        if (dbGame && dbGame.board_fen) {
+          room.chess = new Chess(dbGame.board_fen);
+          room.board = dbGame.board_fen;
+        } else {
+          room.chess = new Chess();
+        }
+      }
+
       // إخبار كلا اللاعبين
       io.to(roomId).emit("game_start", {
         roomId,
@@ -124,163 +145,298 @@ const initSocket = (io) => {
     });
 
     // ── تنفيذ حركة ─────────────────────────────────────────
-    socket.on("make_move", async ({ roomId, move, boardState, turn }) => {
+    socket.on("make_move", async ({ roomId, move }) => {
       const room = activeRooms.get(roomId);
       if (!room || room.status !== "playing") return;
 
-      // التحقق أن اللاعب الصحيح يحرك
+      // Verify correct player and turn
       const player = room.players.find(p => p.id === socket.id);
       if (!player || player.color !== room.turn) {
         return socket.emit("error", { message: "Not your turn" });
       }
 
-      // تحديث حالة الغرفة
-      room.board = boardState;
-      room.turn  = turn;
-      room.moves.push({ move, player: player.color, time: Date.now() });
+      // Validate move with server-side chess engine
+      const chess = room.chess;
+      let chessMove;
+      try {
+        chessMove = chess.move({
+          from: move.from,
+          to: move.to,
+          promotion: move.promotion,
+        });
+      } catch (err) {
+        // Illegal or duplicate move throws – treat as invalid
+        chessMove = null;
+      }
 
-      // إرسال الحركة لكلا اللاعبين
-      io.to(roomId).emit("move_made", {
-        move,
-        boardState,
-        turn,
-        moveCount: room.moves.length,
-      });
+      if (!chessMove) {
+        return socket.emit("error", { message: "Illegal move" });
+      }
 
-      // تسجيل الحركة في DB — أساس الـ Game Replay (Phase 2)
-      // move المتوقع: { from, to, piece, captured, san } — لو الفرونت لسه
-      // مبيبعتش الشكل ده، الحقول الناقصة بتتخزن NULL من غير ما تكسر اللعب
-      if (room.gameId) {
-        try {
-          await Move.record({
-            gameId:        room.gameId,
-            moveNumber:    room.moves.length,
-            playerColor:   player.color,
-            from:          move?.from ?? "??",
-            to:            move?.to ?? "??",
-            piece:         move?.piece ?? "??",
-            capturedPiece: move?.captured,
-            san:           move?.san,
-            fenAfter:      typeof boardState === "string" ? boardState : null,
-          });
-        } catch (err) {
-          logger.error(`Failed to persist move in room ${roomId}: ${err.message}`);
-        }
+      // Update turn based on chess state
+      room.turn = chess.turn();
+
+      // Update board FEN (canonical state)
+      const fen = chess.fen();
+      room.board = fen;
+
+      // Persist move and board update atomically in a DB transaction
+      const previousFEN = room.chess.fen(); // capture state before move for rollback
+      try {
+        await Game.runInTransaction(async (client) => {
+          // Update board FEN
+          await client.query(
+            `UPDATE games SET board_fen = $2 WHERE room_id = $1 RETURNING *`,
+            [roomId, fen]
+          );
+          // Record the move
+          await client.query(
+            `INSERT INTO moves (game_id, move_number, player_color, from_square, to_square, piece, captured_piece, san, fen_after)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+            [
+              room.gameId,
+              room.moves.length + 1,
+              player.color,
+              move?.from ?? "??",
+              move?.to ?? "??",
+              move?.piece ?? "??",
+              move?.captured ?? null,
+              move?.san ?? null,
+              fen,
+            ]
+          );
+        });
+        // Transaction succeeded – update in‑memory state and notify clients
+        room.turn = chess.turn();
+        room.board = fen;
+        room.moves.push({ move, player: player.color, time: Date.now() });
+          // Check for automatic game over (checkmate or draw)
+          if (chess.isCheckmate() || chess.isDraw()) {
+            const derivedResult = chess.isCheckmate() ? "checkmate" : "draw";
+            let derivedWinnerColor = null;
+            let derivedWinner = null;
+            if (derivedResult === "checkmate") {
+              const winnerColor = room.turn === "w" ? "b" : "w";
+              derivedWinnerColor = winnerColor;
+              const winnerPlayer = room.players.find(p => p.color === winnerColor);
+              derivedWinner = winnerPlayer?.name ?? null;
+            }
+            try {
+              if (room.gameId) {
+                await Game.finishById(room.gameId, { result: derivedResult, winnerColor: derivedWinnerColor });
+              }
+              const eloChange = await settleElo(room, derivedWinnerColor);
+              room.status = "finished";
+              io.to(roomId).emit("game_ended", {
+                result: derivedResult,
+                winner: derivedWinner,
+                totalMoves: room.moves.length,
+                duration: Math.floor((Date.now() - room.createdAt) / 1000),
+                eloChange,
+              });
+            } catch (err) {
+              logger.error(`Failed to finalize auto game_over for room ${roomId}: ${err.message}`);
+              socket.emit("error", { message: "Failed to finalize game over" });
+            }
+            return;
+          }
+        io.to(roomId).emit("move_made", {
+          move,
+          boardState: fen,
+          turn: room.turn,
+          moveCount: room.moves.length,
+        });
+      } catch (err) {
+        logger.error(`Failed to record move transaction for room ${roomId}: ${err.message}`);
+        // Roll back in‑memory Chess state
+        try { room.chess.load(previousFEN); } catch (_) {}
+        socket.emit("error", { message: "Failed to record move" });
       }
     });
 
     // ── انتهاء اللعبة ──────────────────────────────────────
+    // ── انتهاء اللعبة (authoritative) ──────────────────────────────────────
     socket.on("game_over", async ({ roomId, result, winner }) => {
       const room = activeRooms.get(roomId);
-      if (!room || room.status === "finished") return; // الطرف التاني بلّغ عن نفس النتيجة خلاص
-      room.status = "finished";
+      if (!room || room.status === "finished") return;
 
-      const winnerColor = room.players.find(p => p.name === winner)?.color ?? null;
-      const eloChange = await settleElo(room, winnerColor); // null لو فيه ضيف مش مسجل
+      // Verify caller is a participant
+      const caller = room.players.find(p => p.id === socket.id);
+      if (!caller) return socket.emit("error", { message: "Not authorized for game_over" });
+              // Require at least two moves before allowing manual game_over (unless auto‑detected)
+              if (room.moves.length < 2) {
+                return socket.emit("error", { message: "Game not over" });
+              }
 
-      io.to(roomId).emit("game_ended", {
-        result,
-        winner,
-        totalMoves: room.moves.length,
-        duration:   Math.floor((Date.now() - room.createdAt) / 1000),
-        eloChange,
-      });
-
-      if (room.gameId) {
-        try {
-          await Game.finishById(room.gameId, { result, winnerColor });
-        } catch (err) {
-          logger.error(`Failed to finish game for room ${roomId}: ${err.message}`);
+      // Derive authoritative result from chess engine
+      let derivedResult = "unknown";
+      let derivedWinnerColor = null;
+      let derivedWinner = null;
+      if (room.chess) {
+        logger.info(`Checking game over state: FEN=${room.chess.fen()} turn=${room.turn} isCheckmate=${room.chess.isCheckmate()} isDraw=${room.chess.isDraw()}`);
+        if (room.chess.isCheckmate()) {
+          derivedResult = "checkmate";
+          const winnerColor = room.turn === "w" ? "b" : "w";
+          derivedWinnerColor = winnerColor;
+          const winnerPlayer = room.players.find(p => p.color === winnerColor);
+          derivedWinner = winnerPlayer?.name ?? null;
+        } else if (room.chess.isDraw()) {
+          derivedResult = "draw";
         }
       }
+      // If the server does not recognize a game-over condition, reject the request
+      if (derivedResult === "unknown") {
+        return socket.emit("error", { message: "Game not over" });
+      }
 
-      // حذف الغرفة بعد دقيقة
+
+      // Ensure DB finish and Elo settlement succeed before emitting game_ended
+      let eloChange = null;
+      try {
+        // Persist game finish to DB first (if applicable)
+        if (room.gameId) {
+          await Game.finishById(room.gameId, { result: derivedResult, winnerColor: derivedWinnerColor });
+        }
+        // Settle Elo after DB finish
+        eloChange = await settleElo(room, derivedWinnerColor);
+        // Mark as finished and broadcast
+        room.status = "finished";
+        io.to(roomId).emit("game_ended", {
+          result: derivedResult,
+          winner: derivedWinner,
+          totalMoves: room.moves.length,
+          duration: Math.floor((Date.now() - room.createdAt) / 1000),
+          eloChange,
+        });
+      } catch (err) {
+        logger.error(`Failed to finalize game_over for room ${roomId}: ${err.message}`);
+        socket.emit("error", { message: "Failed to finalize game over" });
+        return;
+      }
+
       setTimeout(() => {
         activeRooms.delete(roomId);
         logger.info(`Room ${roomId} deleted`);
       }, 60000);
+
     });
 
     // ── طلب إعادة اللعب ────────────────────────────────────
     socket.on("request_rematch", ({ roomId }) => {
       const room = activeRooms.get(roomId);
       if (!room) return;
-      socket.to(roomId).emit("rematch_requested");
+
+      io.to(roomId).emit("rematch_requested");
     });
 
     socket.on("accept_rematch", async ({ roomId }) => {
       const room = activeRooms.get(roomId);
       if (!room) return;
 
-      // إعادة تعيين الغرفة
-      room.board  = null;
-      room.turn   = "w";
+      // Verify caller is a participant
+      const caller = room.players.find(p => p.id === socket.id);
+      if (!caller) return socket.emit("error", { message: "Not authorized for accept_rematch" });
+
+      // Track votes
+      if (!room.rematchVotes) room.rematchVotes = new Set();
+      room.rematchVotes.add(socket.id);
+      if (room.rematchVotes.size < room.players.length) return; // wait for both
+
+      try {
+        const whitePlayer = room.players.find(p => p.color === "w");
+        const blackPlayer = room.players.find(p => p.color === "b");
+        const game = await Game.create({
+          roomId: null, // new game not tied to old room ID
+          whiteUserId: null,
+          whiteUsername: whitePlayer?.name,
+          gameMode: "multiplayer",
+        });
+        if (blackPlayer) {
+          await Game.joinBlackById(game.id, { blackUserId: null, blackUsername: blackPlayer.name });
+        }
+        // Persist new game ID
+        room.gameId = game.id;
+      } catch (err) {
+        logger.error(`Failed to persist rematch game for room ${roomId}: ${err.message}`);
+        // Notify participants of the failure without resetting state
+        io.to(roomId).emit("error", { message: "Rematch failed to create new game" });
+        // Do not modify room state; keep original game running
+        return;
+      }
+
+      // DB transaction succeeded – now reset in‑memory state and broadcast
+      room.rematchVotes = null;
+      room.board = null;
+      room.turn = "w";
       room.status = "playing";
-      room.moves  = [];
+      // Reset server‑side chess engine for new game
+      room.chess = new Chess();
+      room.moves = [];
       room.createdAt = Date.now();
 
-      // تبديل الألوان
+      // Switch colors for both players
       room.players = room.players.map(p => ({
         ...p,
         color: p.color === "w" ? "b" : "w",
       }));
 
+      // Emit game_start after state reset
       io.to(roomId).emit("game_start", {
         roomId,
         players: room.players,
         turn: "w",
       });
-
-      // لعبة جديدة = سطر جديد في games (الريماتش مش استكمال لنفس اللعبة)
-      try {
-        const whitePlayer = room.players.find(p => p.color === "w");
-        const blackPlayer = room.players.find(p => p.color === "b");
-        const game = await Game.create({
-          roomId:        null, // room_id فريد؛ الغرفة القديمة استخدمته فعلاً
-          whiteUserId:   null,
-          whiteUsername: whitePlayer?.name,
-          gameMode:      "multiplayer",
-        });
-        if (blackPlayer) {
-          await Game.joinBlackById(game.id, { blackUserId: null, blackUsername: blackPlayer.name });
-        }
-        room.gameId = game.id;
-      } catch (err) {
-        logger.error(`Failed to persist rematch game for room ${roomId}: ${err.message}`);
-      }
     });
 
-    // ── الاستسلام ──────────────────────────────────────────
+        // ── طلب الاستسلام (Resign) ────────────────────────────────────────────────────────
     socket.on("resign", async ({ roomId }) => {
       const room = activeRooms.get(roomId);
-      if (!room || room.status === "finished") return;
+      if (!room) return;
 
-      const resigningPlayer = room.players.find(p => p.id === socket.id);
-      if (!resigningPlayer) return;
+      // Verify caller is a participant
+      const caller = room.players.find(p => p.id === socket.id);
+      if (!caller) return socket.emit("error", { message: "Not authorized for resign" });
 
-      const winner = room.players.find(p => p.id !== socket.id);
-      room.status = "finished";
+      // Determine opponent and winner color
+      const opponent = room.players.find(p => p.id !== socket.id);
+      const winnerColor = opponent ? opponent.color : null;
+      const derivedResult = "resign";
+      const derivedWinner = opponent ? opponent.name : null;
 
-      const eloChange = await settleElo(room, winner?.color ?? null);
-
-      io.to(roomId).emit("game_ended", {
-        result:     "resign",
-        winner:     winner?.name,
-        totalMoves: room.moves.length,
-        duration:   Math.floor((Date.now() - room.createdAt) / 1000),
-        eloChange,
-      });
-
-      if (room.gameId) {
-        try {
-          await Game.finishById(room.gameId, { result: "resign", winnerColor: winner?.color ?? null });
-        } catch (err) {
-          logger.error(`Failed to finish (resign) game for room ${roomId}: ${err.message}`);
+      // Ensure DB finish and Elo settlement succeed before emitting game_ended
+      let eloChange = null;
+      try {
+        // Persist finish to DB first
+        if (room.gameId) {
+          await Game.finishById(room.gameId, { result: derivedResult, winnerColor });
         }
+        // Settle Elo after DB finish
+        eloChange = await settleElo(room, winnerColor);
+        // Emit game_ended
+        io.to(roomId).emit("game_ended", {
+          result: derivedResult,
+          winner: derivedWinner,
+          totalMoves: room.moves.length,
+          duration: Math.floor((Date.now() - room.createdAt) / 1000),
+          eloChange,
+        });
+        // Update room status after successful DB commit
+        room.status = "finished";
+      } catch (err) {
+        logger.error(`Failed to finalize resign for room ${roomId}: ${err.message}`);
+        socket.emit("error", { message: "Failed to finalize resign" });
+        return;
       }
+
+      // Schedule room cleanup after timeout (same as other exits)
+      setTimeout(() => {
+        activeRooms.delete(roomId);
+        logger.info(`Room ${roomId} deleted`);
+      }, 60000);
+
     });
 
-    // ── شات داخل الغرفة (Game Chat) ─────────────────────────
+    // ── الشات داخل الغرفة (Game Chat) ─────────────────────────
     socket.on("send_message", ({ roomId, text }) => {
       const room = activeRooms.get(roomId);
       if (!room) return;

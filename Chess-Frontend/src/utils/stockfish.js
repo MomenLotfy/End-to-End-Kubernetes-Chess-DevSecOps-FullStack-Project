@@ -1,73 +1,70 @@
-// ============================================================
-// utils/stockfish.js — تحميل وتشغيل محرك Stockfish (Chess AI + Move Hints)
-//
-// بيحمّل stockfish.js (نسخة asm.js/wasm خفيفة، بدون احتياج لـ
-// SharedArrayBuffer أو CORS headers خاصة) من cdnjs وقت الحاجة بس،
-// وبيشغّله جوه Web Worker عن طريق fetch + Blob (يتجنب مشاكل
-// تحميل Worker من origin مختلف مباشرة).
-// ============================================================
-const ENGINE_URL = "https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.js";
+const ENGINE_SCRIPT = "/stockfish/stockfish.js";
+let enginePromise = null;
+let scriptPromise = null;
 
-let workerPromise = null;
+function loadScript() {
+  if (window.Stockfish) return Promise.resolve();
+  if (scriptPromise) return scriptPromise;
+  scriptPromise = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = ENGINE_SCRIPT;
+    script.async = true;
+    script.onload = resolve;
+    script.onerror = () => reject(new Error("Could not load the self-hosted chess engine"));
+    document.head.appendChild(script);
+  });
+  return scriptPromise;
+}
 
-const loadWorker = async () => {
-  const res = await fetch(ENGINE_URL);
-  if (!res.ok) throw new Error("Couldn't download the chess engine (network/CDN issue)");
-  const code = await res.text();
-  const blob = new Blob([code], { type: "application/javascript" });
-  const worker = new Worker(URL.createObjectURL(blob));
-
-  // نستنى الجاهزية (uci → uciok، isready → readyok)
+async function loadEngine() {
+  await loadScript();
+  if (typeof window.Stockfish !== "function") throw new Error("Chess engine initialization failed");
+  const engine = await window.Stockfish();
   await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("Engine init timed out")), 15000);
-    const onMsg = (e) => {
-      const line = e.data;
-      if (line === "uciok") worker.postMessage("isready");
+    const timeout = window.setTimeout(() => reject(new Error("Engine init timed out")), 15000);
+    const listener = line => {
+      if (line === "uciok") engine.postMessage("isready");
       if (line === "readyok") {
-        clearTimeout(timeout);
-        worker.removeEventListener("message", onMsg);
+        window.clearTimeout(timeout);
+        engine.removeMessageListener(listener);
         resolve();
       }
     };
-    worker.addEventListener("message", onMsg);
-    worker.postMessage("uci");
+    engine.addMessageListener(listener);
+    engine.postMessage("uci");
   });
+  return engine;
+}
 
-  return worker;
-};
-
-// Singleton — نحمّل الـ worker مرة واحدة بس ونعيد استخدامه
 export const getEngine = () => {
-  if (!workerPromise) workerPromise = loadWorker();
-  return workerPromise;
+  if (!enginePromise) enginePromise = loadEngine();
+  return enginePromise;
 };
 
-// بيرجع أفضل حركة لوضع (FEN) معين، بصيغة UCI ("e2e4", "e7e8q")
-// skillLevel: 0 (أضعف) → 20 (أقوى، تقريبًا بدون أخطاء)
-export const getBestMoveUci = async (fen, { skillLevel = 10, movetimeMs = 800 } = {}) => {
-  const worker = await getEngine();
-
+export async function getBestMoveUci(fen, { skillLevel = 10, movetimeMs = 800 } = {}) {
+  const engine = await getEngine();
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("Engine move timed out")), movetimeMs + 10000);
-    const onMsg = (e) => {
-      const line = e.data;
+    const timeout = window.setTimeout(() => {
+      engine.removeMessageListener(listener);
+      engine.postMessage("stop");
+      reject(new Error("Engine move timed out"));
+    }, movetimeMs + 10000);
+    const listener = line => {
       if (typeof line === "string" && line.startsWith("bestmove")) {
-        clearTimeout(timeout);
-        worker.removeEventListener("message", onMsg);
+        window.clearTimeout(timeout);
+        engine.removeMessageListener(listener);
         const uci = line.split(" ")[1];
         resolve(uci === "(none)" ? null : uci);
       }
     };
-    worker.addEventListener("message", onMsg);
-    worker.postMessage(`setoption name Skill Level value ${skillLevel}`);
-    worker.postMessage("position fen " + fen);
-    worker.postMessage(`go movetime ${movetimeMs}`);
+    engine.addMessageListener(listener);
+    engine.postMessage(`setoption name Skill Level value ${Math.max(0, Math.min(20, skillLevel))}`);
+    engine.postMessage(`position fen ${fen}`);
+    engine.postMessage(`go movetime ${Math.max(50, movetimeMs)}`);
   });
-};
+}
 
-export const terminateEngine = () => {
-  if (workerPromise) {
-    workerPromise.then(w => w.terminate()).catch(() => {});
-    workerPromise = null;
-  }
-};
+export function terminateEngine() {
+  if (enginePromise) enginePromise.then(engine => engine.postMessage("quit")).catch(() => {});
+  enginePromise = null;
+}

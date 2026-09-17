@@ -41,11 +41,6 @@ export default function HomeScreen({ user, token, onLogout, onAuthSuccess, onPla
     display: "flex", flexDirection: "column", alignItems: "center", gap: "6px", cursor: "pointer",
     color: C.txMut, fontSize: "var(--fs-caption)", fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase",
   };
-  const linkIcon = {
-    width: "46px", height: "46px", borderRadius: "var(--r-lg)", display: "flex", alignItems: "center", justifyContent: "center",
-    background: C.pnl, border: `1px solid ${C.pnlBd}`, fontSize: "1.2rem", color: C.gold,
-  };
-
   return (
     <div className="cm-screen" style={{ minHeight: "100vh", background: C.bgGradient || C.bg, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", fontFamily: "var(--font-ui)", gap: "28px", position: "relative", padding: "24px" }}>
       {showAuth && <AuthModal onClose={() => setShowAuth(false)} onSuccess={onAuthSuccess} />}
@@ -101,15 +96,16 @@ export default function HomeScreen({ user, token, onLogout, onAuthSuccess, onPla
         <div style={{ display: "flex", gap: "10px", width: "100%", flexWrap: "wrap" }}>
           <Button variant="secondary" style={{ flex: 1, minWidth: "120px", display: "flex", alignItems: "center", justifyContent: "center", gap: "4px" }} onClick={onPlayAI}><Icon name="chess" size={24} />Vs Computer</Button>
           <Button variant="primary" style={{ flex: 1, minWidth: "120px", display: "flex", alignItems: "center", justifyContent: "center", gap: "4px" }} onClick={() => onPlayLocal(timeControl.minutes)}><Icon name="chess" size={24} />Play Local</Button>
-          <Button variant="secondary" style={{ flex: 1, minWidth: "120px", display: "flex", alignItems: "center", justifyContent: "center", gap: "4px" }} onClick={onPlayOnline}><Icon name="online-chess" size={24} />Play Online</Button>
+          <Button variant="secondary" style={{ flex: 1, minWidth: "120px", display: "flex", alignItems: "center", justifyContent: "center", gap: "4px" }} onClick={() => user ? onPlayOnline() : setShowAuth(true)}><Icon name="online-chess" size={24} />Play Online</Button>
         </div>
       </div>
 
       {/* quick links row */}
-      <div style={{ display: "flex", gap: "20px" }}>
+      <div style={{ display: "flex", gap: "20px", flexWrap: "wrap", justifyContent: "center" }}>
         <div style={linkChip} onClick={() => setShowLeaderboard(true)}><Icon name="chess-cup" size={46} />Leaderboard</div>
         <div style={linkChip} onClick={() => setShowTournaments(true)}><Icon name="knock-out-stage" size={46} />Tournaments</div>
         <div style={linkChip} onClick={() => user ? setShowFriends(true) : setShowAuth(true)}><Icon name="friends" size={46} />Friends</div>
+        <a href="/meet-the-creator" style={{ ...linkChip, textDecoration: "none" }}><Icon name="profile" size={46} />Meet the Creator</a>
       </div>
 
       {!user && <div style={{ fontSize: "var(--fs-caption)", color: C.txFaint, textAlign: "center", maxWidth: "260px" }}>Sign in to save your scores, climb the ELO leaderboard, and challenge friends.</div>}

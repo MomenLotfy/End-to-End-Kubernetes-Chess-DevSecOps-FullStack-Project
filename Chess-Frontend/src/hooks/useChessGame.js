@@ -35,6 +35,26 @@ export default function useChessGame({ onGameFinished, onMoveCommitted } = {}) {
     setCapt({ w: [], b: [] }); setHist([]); setMoveLog([]); setPromo(null); setGameStart(Date.now()); setPast([]);
   };
 
+  const loadFEN = (fen, persistedMoves = []) => {
+    const [placement, activeColor, castling, enPassant] = fen.split(" ");
+    const restored = placement.split("/").map(rank => {
+      const row = [];
+      for (const symbol of rank) {
+        if (/\d/.test(symbol)) row.push(...Array(Number(symbol)).fill(null));
+        else row.push((symbol === symbol.toUpperCase() ? "w" : "b") + symbol.toUpperCase());
+      }
+      return row;
+    });
+    if (restored.length !== 8 || restored.some(row => row.length !== 8)) throw new Error("Invalid recovered board");
+    setBoard(restored); setTurn(activeColor); setSel(null); setMoves([]);
+    setCast({ wK: castling.includes("K"), wQ: castling.includes("Q"), bK: castling.includes("k"), bQ: castling.includes("q") });
+    setEp(enPassant === "-" ? null : squareToRC(enPassant));
+    const last = persistedMoves.at(-1);
+    setLastMv(last ? [...squareToRC(last.from), ...squareToRC(last.to)] : null);
+    setStatus(null); setCapt({ w: [], b: [] }); setHist(persistedMoves.map(move => move.san).filter(Boolean));
+    setMoveLog(persistedMoves); setPromo(null); setPast([]); setGameStart(Date.now());
+  };
+
   // الـ snapshot بياخد الحالة الحالية (قبل ما الحركة تتنفذ) عشان الـ Undo
   const snapshot = () => ({ board, turn, sel, moves, ep, cast, lastMv, status, capt, hist, moveLog });
 
@@ -186,6 +206,6 @@ export default function useChessGame({ onGameFinished, onMoveCommitted } = {}) {
   return {
     board, turn, sel, moves, mvSet, lastMv, status, capt, hist, moveLog, promo, ckKing, cast, ep,
     canUndo: past.length > 0 && !promo,
-    reset, click, doPromo, undo, forceEnd, applyRemoteMove,
+    reset, loadFEN, click, doPromo, undo, forceEnd, applyRemoteMove,
   };
 }

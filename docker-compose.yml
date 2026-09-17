@@ -1,16 +1,11 @@
-version: '3.8'
-
 services:
   chess-postgres:
     image: postgres:16-alpine
-    container_name: chess-postgres
     restart: unless-stopped
-    ports:
-      - "5433:5432"
     environment:
       POSTGRES_DB: chess_db
       POSTGRES_USER: chess_user
-      POSTGRES_PASSWORD: chess_password
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -18,58 +13,127 @@ services:
       test: ["CMD-SHELL", "pg_isready -U chess_user -d chess_db"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 12
+      start_period: 10s
+    networks: [chess_internal]
+    security_opt: ["no-new-privileges:true"]
+    logging: &logging
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
 
   chess-migration:
     build:
       context: ./Database/migrations
-      dockerfile: Dockerfile
-    container_name: chess-migration
-    environment:
-      - DB_HOST=chess-postgres
-      - DB_PORT=5432
-      - DB_NAME=chess_db
-      - DB_USER=chess_user
-      - DB_PASSWORD=chess_password
+    restart: "no"
+    environment: &database_environment
+      DB_HOST: chess-postgres
+      DB_PORT: "5432"
+      DB_NAME: chess_db
+      DB_USER: chess_user
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      DB_SSL: "false"
     depends_on:
-      chess-postgres:
-        condition: service_healthy
+      chess-postgres: { condition: service_healthy }
+    networks: [chess_internal]
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=16m"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    logging: *logging
 
   chess-backend:
     build:
       context: ./Chess-Backend
-      dockerfile: Dockerfile
-    container_name: chess-backend
     restart: unless-stopped
-    ports:
-      - "5000:5000"
     environment:
-      - NODE_ENV=production
-      - PORT=5000
-      - DB_HOST=chess-postgres
-      - DB_PORT=5432
-      - DB_NAME=chess_db
-      - DB_USER=chess_user
-      - DB_PASSWORD=chess_password
-      - JWT_SECRET=chess-jwt-secret-CHANGE-ME-IN-PRODUCTION
-      - JWT_EXPIRES=7d
-      - FRONTEND_URL=http://localhost:3000
+      <<: *database_environment
+      NODE_ENV: production
+      PORT: "5000"
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET of at least 32 random characters is required}
+      JWT_ACCESS_EXPIRES: 15m
+      REFRESH_TOKEN_DAYS: "30"
+      FRONTEND_URL: ${APP_ORIGIN:?APP_ORIGIN must be the public https origin}
+      SMTP_HOST: ${SMTP_HOST:?SMTP_HOST is required}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_REQUIRE_TLS: ${SMTP_REQUIRE_TLS:-true}
+      SMTP_TLS_REJECT_UNAUTHORIZED: ${SMTP_TLS_REJECT_UNAUTHORIZED:-true}
+      EMAIL_FROM: ${EMAIL_FROM:?EMAIL_FROM is required}
+      TRUST_PROXY_HOPS: "1"
     depends_on:
-      chess-postgres:
-        condition: service_healthy
-      chess-migration:
-        condition: service_completed_successfully
+      chess-postgres: { condition: service_healthy }
+      chess-migration: { condition: service_completed_successfully }
+    volumes:
+      - uploads_data:/app/uploads
+    expose: ["5000"]
+    networks: [chess_internal]
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=32m"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5000/readiness >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    logging: *logging
+
+  postgres-integration-tests:
+    profiles: ["test"]
+    build:
+      context: .
+      dockerfile: tests/Dockerfile.integration
+    environment:
+      <<: *database_environment
+      JWT_SECRET: integration-secret-that-is-longer-than-thirty-two-characters
+      NODE_ENV: test
+      FRONTEND_URL: https://localhost
+    depends_on:
+      chess-postgres: { condition: service_healthy }
+    networks: [chess_internal]
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=32m"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
 
   chess-frontend:
     build:
       context: ./Chess-Frontend
-      dockerfile: Dockerfile
-    container_name: chess-frontend
     restart: unless-stopped
-    ports:
-      - "3000:80"
     depends_on:
-      - chess-backend
+      chess-backend: { condition: service_healthy }
+    ports:
+      - "80:8080"
+      - "443:8443"
+    volumes:
+      - ./certs/fullchain.pem:/etc/nginx/tls/fullchain.pem:ro
+      - ./certs/privkey.pem:/etc/nginx/tls/privkey.pem:ro
+      - certbot_webroot:/var/www/certbot:ro
+    networks: [chess_internal]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+      - /var/cache/nginx:rw,noexec,nosuid,size=32m
+      - /var/run:rw,noexec,nosuid,size=4m
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    stop_grace_period: 15s
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-check-certificate -qO- https://127.0.0.1:8443/liveness >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    logging: *logging
+
+networks:
+  chess_internal:
+    driver: bridge
 
 volumes:
   postgres_data:
+  uploads_data:
+  certbot_webroot:

@@ -1,19 +1,20 @@
-// ============================================================
-// utils/authStorage.js — قراءة/كتابة بيانات المستخدم المحفوظة محليًا
-// ============================================================
+// Only non-sensitive display state is persisted. Authentication credentials live exclusively
+// in HttpOnly cookies and are therefore inaccessible to JavaScript.
 export const getStoredUser = () => {
-  try { return JSON.parse(localStorage.getItem("chess_user")); }
+  localStorage.removeItem("chess_token");
+  try { return JSON.parse(sessionStorage.getItem("chess_user")); }
   catch { return null; }
 };
 
-export const getStoredToken = () => localStorage.getItem("chess_token") || null;
+export const getStoredToken = () => Boolean(getStoredUser());
 
-export const storeAuth = (token, user) => {
-  localStorage.setItem("chess_token", token);
-  localStorage.setItem("chess_user", JSON.stringify(user));
+export const storeAuth = (user) => {
+  localStorage.removeItem("chess_token");
+  sessionStorage.setItem("chess_user", JSON.stringify(user));
 };
 
 export const clearAuth = () => {
   localStorage.removeItem("chess_token");
   localStorage.removeItem("chess_user");
+  sessionStorage.removeItem("chess_user");
 };

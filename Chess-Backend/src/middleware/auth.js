@@ -1,45 +1,37 @@
-// ============================================================
-// middleware/auth.js — JWT Authentication Middleware
-// ============================================================
-const jwt    = require("jsonwebtoken");
+const db = require("../config/db");
 const logger = require("../config/logger");
+const { ACCESS_COOKIE, verifyAccessToken } = require("../services/tokens");
 
-const authMiddleware = (req, res, next) => {
-  const authHeader = req.headers.authorization;
+async function activeSession(payload) {
+  if (!Number.isInteger(payload.id) || !Number.isInteger(payload.sessionVersion)) return false;
+  const result = await db.query("SELECT session_version, email_verified_at FROM users WHERE id=$1", [payload.id]);
+  return result.rowCount === 1
+    && result.rows[0].email_verified_at
+    && result.rows[0].session_version === payload.sessionVersion;
+}
 
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return res.status(401).json({ error: "No token provided" });
-  }
-
-  const token = authHeader.split(" ")[1];
-
+async function authMiddleware(req, res, next) {
+  const token = req.cookies?.[ACCESS_COOKIE];
+  if (!token) return res.status(401).json({ error: "Authentication required" });
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || "chess-secret-key");
-    req.user = decoded;
+    const payload = verifyAccessToken(token);
+    if (!await activeSession(payload)) return res.status(401).json({ error: "Authentication required" });
+    req.user = payload;
     next();
-  } catch (err) {
-    logger.warn(`Invalid token: ${err.message}`);
-    if (err.name === "TokenExpiredError") {
-      return res.status(401).json({ error: "Token expired" });
-    }
-    return res.status(401).json({ error: "Invalid token" });
+  } catch (error) {
+    logger.warn(`Access token rejected: ${error.name}`);
+    return res.status(401).json({ error: "Authentication required" });
   }
-};
+}
 
-// Middleware اختياري — لا يوقف الطلب إذا لم يكن هناك token
-const optionalAuth = (req, res, next) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    req.user = null;
-    return next();
-  }
-  const token = authHeader.split(" ")[1];
+async function optionalAuth(req, res, next) {
+  const token = req.cookies?.[ACCESS_COOKIE];
+  if (!token) return next();
   try {
-    req.user = jwt.verify(token, process.env.JWT_SECRET || "chess-secret-key");
-  } catch {
-    req.user = null;
-  }
+    const payload = verifyAccessToken(token);
+    if (await activeSession(payload)) req.user = payload;
+  } catch (error) { logger.warn(`Optional access token rejected: ${error.name}`); }
   next();
-};
+}
 
-module.exports = { authMiddleware, optionalAuth };
+module.exports = { authMiddleware, optionalAuth, activeSession };

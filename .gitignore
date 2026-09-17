@@ -47,7 +47,7 @@ dist/
 *credentials*
 
 # --- Docker ---
-.dockerignore
+# .dockerignore files are intentionally tracked for reproducible, minimal contexts.
 
 # --- Security Scan Reports (لا تُرفع للـ repo) ---
 trivyfs.txt
@@ -83,3 +83,10 @@ logs/
 
 # --- Jenkins ---
 .jenkins/
+
+backups/
+certs/
+letsencrypt/
+playwright-report/
+test-results/
+tests/certs/

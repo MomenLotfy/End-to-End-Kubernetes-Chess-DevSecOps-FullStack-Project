@@ -1,0 +1,40 @@
+services:
+  mailpit:
+    image: axllent/mailpit:v1.27.8
+    profiles: ["e2e"]
+    expose: ["1025", "8025"]
+    networks: [chess_internal]
+    security_opt: ["no-new-privileges:true"]
+
+  chess-backend:
+    environment:
+      FRONTEND_URL: https://chess-frontend:8443
+      SMTP_HOST: mailpit
+      SMTP_PORT: "1025"
+      SMTP_USER: ""
+      SMTP_PASSWORD: ""
+      SMTP_REQUIRE_TLS: "false"
+      SMTP_TLS_REJECT_UNAUTHORIZED: "true"
+      EMAIL_FROM: Chess E2E <chess@example.test>
+    depends_on:
+      mailpit: { condition: service_started }
+
+  chess-frontend:
+    volumes:
+      - ./tests/certs/fullchain.pem:/etc/nginx/tls/fullchain.pem:ro
+      - ./tests/certs/privkey.pem:/etc/nginx/tls/privkey.pem:ro
+
+  browser-e2e:
+    profiles: ["e2e"]
+    build:
+      context: ./e2e
+    environment:
+      E2E_BASE_URL: https://chess-frontend:8443
+      E2E_IGNORE_HTTPS_ERRORS: "true"
+      MAILPIT_URL: http://mailpit:8025
+    depends_on:
+      chess-frontend: { condition: service_healthy }
+      mailpit: { condition: service_started }
+    networks: [chess_internal]
+    ipc: host
+    security_opt: ["no-new-privileges:true"]

@@ -1,13 +1,22 @@
 // ============================================================
 // models/User.js — User Model (PostgreSQL)
 // ============================================================
-const { query } = require("../config/db");
+const { query, pool } = require("../config/db");
 const bcrypt    = require("bcryptjs");
 
+const PUBLIC_KEYS = ["id", "username", "email", "avatar_url", "bio", "elo_rating", "created_at"];
+
 const User = {
+  publicFields(user) {
+    return Object.fromEntries(PUBLIC_KEYS.filter(key => user[key] !== undefined).map(key => [key, user[key]]));
+  },
+
+  hashPassword(password) {
+    return bcrypt.hash(password, 12);
+  },
 
   async create({ username, email, password }) {
-    const hashedPassword = await bcrypt.hash(password, 12);
+    const hashedPassword = await this.hashPassword(password);
     const result = await query(
       `INSERT INTO users (username, email, password_hash)
        VALUES ($1, $2, $3)
@@ -48,16 +57,42 @@ const User = {
   },
 
   // تحديث الملف الشخصي (Bio / Avatar) — Phase 1: Profile Page + Avatar Upload
-  async updateProfile(id, { bio, avatarUrl }) {
+  async updateProfile(id, { bio }) {
     const result = await query(
-      `UPDATE users
-       SET bio        = COALESCE($2, bio),
-           avatar_url = COALESCE($3, avatar_url)
-       WHERE id = $1
+      `UPDATE users SET bio=$2 WHERE id=$1
        RETURNING id, username, email, avatar_url, bio, elo_rating, created_at`,
-      [id, bio ?? null, avatarUrl ?? null]
+      [id, bio ?? null]
     );
     return result.rows[0] || null;
+  },
+
+  async replaceAvatar(id, avatarUrl) {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const current = await client.query("SELECT avatar_url FROM users WHERE id=$1 FOR UPDATE", [id]);
+      if (current.rowCount !== 1) { await client.query("ROLLBACK"); return null; }
+      const updated = await client.query(
+        `UPDATE users SET avatar_url=$2 WHERE id=$1
+         RETURNING id, username, email, avatar_url, bio, elo_rating, created_at`,
+        [id, avatarUrl]
+      );
+      if (updated.rowCount !== 1) throw new Error("Avatar update affected an unexpected number of rows");
+      await client.query("COMMIT");
+      return { user: updated.rows[0], previousAvatarUrl: current.rows[0].avatar_url };
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch (_) {}
+      throw error;
+    } finally { client.release(); }
+  },
+
+  async invalidateSessions(id) {
+    const result = await query(
+      `UPDATE users SET session_version=session_version+1 WHERE id=$1 RETURNING session_version`,
+      [id]
+    );
+    if (result.rowCount !== 1) throw new Error("Session invalidation failed");
+    return result.rows[0].session_version;
   },
 
   // تحديث ELO بعد انتهاء لعبة — أساس Phase 3

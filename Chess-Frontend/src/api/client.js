@@ -1,74 +1,61 @@
-// ============================================================
-// api/client.js — كل نداءات الـ Backend في مكان واحد
-// ============================================================
-export const API = process.env.REACT_APP_API_URL || "http://localhost:5000";
+export const API = process.env.REACT_APP_API_URL || "";
 
-async function request(path, { method = "GET", token, body } = {}) {
-  const headers = { "Content-Type": "application/json" };
-  if (token) headers.Authorization = `Bearer ${token}`;
-
-  const res = await fetch(`${API}${path}`, {
+async function request(path, { method = "GET", body, retry = true } = {}) {
+  const response = await fetch(`${API}${path}`, {
     method,
-    headers,
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
     body: body ? JSON.stringify(body) : undefined,
   });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.errors?.[0]?.msg || data.error || "Request failed");
+  if (response.status === 401 && retry && path !== "/api/auth/login" && path !== "/api/auth/refresh") {
+    const refreshed = await fetch(`${API}/api/auth/refresh`, { method: "POST", credentials: "include" });
+    if (refreshed.ok) return request(path, { method, body, retry: false });
+  }
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "Request failed");
   return data;
 }
 
-// ── Auth ─────────────────────────────────────────────────
-export const login    = (email, password) => request("/api/auth/login", { method: "POST", body: { email, password } });
+export const login = (email, password) => request("/api/auth/login", { method: "POST", body: { email, password } });
 export const register = (username, email, password) => request("/api/auth/register", { method: "POST", body: { username, email, password } });
-export const getProfile    = (token) => request("/api/auth/profile", { token });
-export const updateProfile = (token, { bio, avatarUrl }) => request("/api/auth/profile", { method: "PATCH", token, body: { bio, avatarUrl } });
+export const logout = () => request("/api/auth/logout", { method: "POST", retry: false });
+export const refreshSession = () => request("/api/auth/refresh", { method: "POST", retry: false });
+export const verifyEmail = token => request("/api/auth/verify-email", { method: "POST", body: { token } });
+export const forgotPassword = email => request("/api/auth/forgot-password", { method: "POST", body: { email } });
+export const resetPassword = (token, password) => request("/api/auth/reset-password", { method: "POST", body: { token, password } });
+export const getProfile = () => request("/api/auth/profile");
+export const updateProfile = (_session, { bio, avatarUrl }) => request("/api/auth/profile", { method: "PATCH", body: { bio, avatarUrl } });
 
-// رفع صورة أفاتار (multipart/form-data — مش JSON زي باقي النداءات)
-export const uploadAvatar = async (token, file) => {
+export const uploadAvatar = async (_session, file) => {
   const form = new FormData();
   form.append("avatar", file);
-  const res = await fetch(`${API}/api/auth/avatar`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}` },
-    body: form,
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || "Upload failed");
+  const response = await fetch(`${API}/api/auth/avatar`, { method: "POST", credentials: "include", body: form });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "Upload failed");
   return data;
 };
 
-// ── Leaderboard ──────────────────────────────────────────
 export const getLeaderboard = () => request("/api/leaderboard");
 export const getEloLeaderboard = () => request("/api/leaderboard/elo");
-export const getMyStats     = (token) => request("/api/leaderboard/me", { token });
-export const getMyHistory   = (token) => request("/api/leaderboard/history", { token });
-export const getMyAchievements = (token) => request("/api/leaderboard/achievements", { token });
-
-export const saveScore = (token, { moves, duration, winner, moveHistory, mode }) => {
-  if (!token) return Promise.resolve(null);
-  return request("/api/leaderboard/save", {
-    method: "POST",
-    token,
-    body: { moves, duration, winner, moveHistory, mode },
-  }).catch(err => { console.warn("Score save failed:", err.message); return null; });
+export const getMyStats = () => request("/api/leaderboard/me");
+export const getMyHistory = () => request("/api/leaderboard/history");
+export const getMyAchievements = () => request("/api/leaderboard/achievements");
+export const saveScore = (session, { moves, duration, winner, moveHistory, mode }) => {
+  if (!session) return Promise.resolve(null);
+  return request("/api/leaderboard/save", { method: "POST", body: { moves, duration, winner, moveHistory, mode } })
+    .catch(err => { console.warn("Score save failed:", err.message); return null; });
 };
-
-// ── Game / Replay ────────────────────────────────────────
-export const getGame      = (id) => request(`/api/game/${id}`);
-export const getGameMoves = (id) => request(`/api/game/${id}/moves`);
-
-// ── Friends ──────────────────────────────────────────────
-export const getFriends         = (token) => request("/api/friends", { token });
-export const getFriendRequests  = (token) => request("/api/friends/requests", { token });
-export const sendFriendRequest  = (token, username) => request("/api/friends/request", { method: "POST", token, body: { username } });
-export const acceptFriendRequest  = (token, id) => request(`/api/friends/${id}/accept`, { method: "POST", token });
-export const declineFriendRequest = (token, id) => request(`/api/friends/${id}/decline`, { method: "POST", token });
-export const removeFriend         = (token, id) => request(`/api/friends/${id}`, { method: "DELETE", token });
-
-// ── Tournaments ──────────────────────────────────────────
-export const listTournaments  = () => request("/api/tournaments");
-export const getTournament    = (id) => request(`/api/tournaments/${id}`);
-export const createTournament = (token, name, maxPlayers) => request("/api/tournaments", { method: "POST", token, body: { name, maxPlayers } });
-export const joinTournament   = (token, id) => request(`/api/tournaments/${id}/join`, { method: "POST", token });
-export const startTournament  = (token, id) => request(`/api/tournaments/${id}/start`, { method: "POST", token });
-export const reportMatchResult = (token, matchId, winnerId) => request(`/api/tournaments/matches/${matchId}/report`, { method: "POST", token, body: { winnerId } });
+export const getGame = id => request(`/api/game/${id}`);
+export const getGameMoves = id => request(`/api/game/${id}/moves`);
+export const getFriends = () => request("/api/friends");
+export const getFriendRequests = () => request("/api/friends/requests");
+export const sendFriendRequest = (_session, username) => request("/api/friends/request", { method: "POST", body: { username } });
+export const acceptFriendRequest = (_session, id) => request(`/api/friends/${id}/accept`, { method: "POST" });
+export const declineFriendRequest = (_session, id) => request(`/api/friends/${id}/decline`, { method: "POST" });
+export const removeFriend = (_session, id) => request(`/api/friends/${id}`, { method: "DELETE" });
+export const listTournaments = () => request("/api/tournaments");
+export const getTournament = id => request(`/api/tournaments/${id}`);
+export const createTournament = (_session, name, maxPlayers) => request("/api/tournaments", { method: "POST", body: { name, maxPlayers } });
+export const joinTournament = (_session, id) => request(`/api/tournaments/${id}/join`, { method: "POST" });
+export const startTournament = (_session, id) => request(`/api/tournaments/${id}/start`, { method: "POST" });
+export const reportMatchResult = (_session, matchId, winnerId) => request(`/api/tournaments/matches/${matchId}/report`, { method: "POST", body: { winnerId } });

@@ -1,0 +1,15 @@
+.git
+**/node_modules
+**/coverage
+**/build
+**/.env*
+backups
+certs
+letsencrypt
+playwright-report
+test-results
+Manifest-file
+EKS-TF
+Jenkins-Server-TF
+Jenkins-Pipeline-Code
+monitoring

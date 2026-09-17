@@ -1,0 +1,15 @@
+FROM node:22-alpine
+RUN addgroup -S -g 1001 appgroup && adduser -S -D -H -u 1001 -G appgroup appuser
+WORKDIR /workspace/Chess-Backend
+COPY --chown=1001:1001 Chess-Backend/package.json Chess-Backend/package-lock.json ./
+RUN npm ci && npm cache clean --force
+COPY --chown=1001:1001 Chess-Backend/src ./src
+COPY --chown=1001:1001 Chess-Backend/tests ./tests
+WORKDIR /workspace/Database/migrations
+COPY --chown=1001:1001 Database/migrations/package.json Database/migrations/package-lock.json ./
+RUN npm ci --omit=dev && npm cache clean --force
+COPY --chown=1001:1001 Database/migrations .
+WORKDIR /workspace
+COPY --chown=1001:1001 tests/run-postgres-integration.js ./tests/run-postgres-integration.js
+USER 1001:1001
+CMD ["node", "tests/run-postgres-integration.js"]

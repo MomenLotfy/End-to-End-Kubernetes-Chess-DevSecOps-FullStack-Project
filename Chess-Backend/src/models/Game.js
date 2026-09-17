@@ -1,116 +1,111 @@
-// ============================================================
-// models/Game.js — Game Model (PostgreSQL)
-// بديل تخزين الغرف في الميموري بس — كل لعبة بقت لها سطر دائم
-// ============================================================
 const { query, pool } = require("../config/db");
 
+function requireOne(result, operation) {
+  if (result.rowCount !== 1) throw new Error(`${operation} affected ${result.rowCount} rows`);
+  return result.rows[0];
+}
+
 const Game = {
-
-  // إنشاء لعبة جديدة (بتتنادى وقت create_room)
-  async create({ roomId, whiteUserId, whiteUsername, gameMode = "multiplayer" }) {
-    const result = await query(
-      `INSERT INTO games (room_id, white_user_id, white_username, game_mode, status)
-       VALUES ($1, $2, $3, $4, 'in_progress')
-       RETURNING *`,
-      [roomId, whiteUserId ?? null, whiteUsername, gameMode]
+  async create({ roomId, whiteUserId, whiteUsername, gameMode = "multiplayer" }, client = null) {
+    const result = await (client || { query }).query(
+      `INSERT INTO games (room_id, white_user_id, white_username, game_mode, status, board_fen)
+       VALUES ($1,$2,$3,$4,'in_progress',$5) RETURNING *`,
+      [roomId, whiteUserId ?? null, whiteUsername, gameMode, "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"]
     );
-    return result.rows[0];
+    return requireOne(result, "create game");
   },
 
-  // انضمام اللاعب الأسود عن طريق room_id (multiplayer)
-  async joinBlack(roomId, { blackUserId, blackUsername }) {
-    const result = await query(
-      `UPDATE games
-       SET black_user_id = $2, black_username = $3
-       WHERE room_id = $1
-       RETURNING *`,
-      [roomId, blackUserId ?? null, blackUsername]
-    );
-    return result.rows[0] || null;
+  async claimBlack(gameId, { blackUserId, blackUsername }) {
+    return this.runInTransaction(async client => {
+      const game = await client.query("SELECT * FROM games WHERE id=$1 FOR UPDATE", [gameId]);
+      requireOne(game, "lock game for join");
+      if (game.rows[0].status !== "in_progress" || game.rows[0].black_username) return null;
+      const result = await client.query(
+        `UPDATE games SET black_user_id=$2, black_username=$3
+         WHERE id=$1 AND status='in_progress' AND black_username IS NULL RETURNING *`,
+        [gameId, blackUserId ?? null, blackUsername]
+      );
+      return requireOne(result, "join black player");
+    });
   },
 
-  // انضمام اللاعب الأسود عن طريق id مباشرة (لعب local/rematch مفيش لها room_id)
-  async joinBlackById(id, { blackUserId, blackUsername }) {
-    const result = await query(
-      `UPDATE games
-       SET black_user_id = $2, black_username = $3
-       WHERE id = $1
-       RETURNING *`,
-      [id, blackUserId ?? null, blackUsername]
+  async joinBlack(roomId, player) {
+    const found = await this.findByRoomId(roomId);
+    if (!found) throw new Error("Game not found for room");
+    return this.claimBlack(found.id, player);
+  },
+
+  async joinBlackById(id, player, client = null) {
+    const result = await (client || { query }).query(
+      `UPDATE games SET black_user_id=$2, black_username=$3
+       WHERE id=$1 AND status='in_progress' AND black_username IS NULL RETURNING *`,
+      [id, player.blackUserId ?? null, player.blackUsername]
     );
-    return result.rows[0] || null;
+    return requireOne(result, "join black player by game id");
   },
 
   async findByRoomId(roomId) {
-    const result = await query("SELECT * FROM games WHERE room_id = $1", [roomId]);
+    const result = await query("SELECT * FROM games WHERE room_id=$1", [roomId]);
     return result.rows[0] || null;
   },
-
-  // للـ Game Replay — جلب لعبة عن طريق الـ id
   async findById(id) {
-    const result = await query("SELECT * FROM games WHERE id = $1", [id]);
+    const result = await query("SELECT * FROM games WHERE id=$1", [id]);
     return result.rows[0] || null;
   },
-
-  // إنهاء اللعبة عن طريق room_id (multiplayer)
-  async finish(roomId, { result: gameResult, winnerColor }) {
-    const res = await query(
-      `UPDATE games
-       SET status = 'finished', result = $2, winner_color = $3, ended_at = CURRENT_TIMESTAMP
-       WHERE room_id = $1
-       RETURNING *`,
-      [roomId, gameResult, winnerColor ?? null]
+  async findRecoverable() {
+    const result = await query(
+      `SELECT g.*, COALESCE(json_agg(m ORDER BY m.move_number) FILTER (WHERE m.id IS NOT NULL), '[]') AS persisted_moves
+       FROM games g LEFT JOIN moves m ON m.game_id=g.id
+       WHERE g.status='in_progress' AND g.game_mode='multiplayer' AND g.room_id IS NOT NULL
+       GROUP BY g.id ORDER BY g.id`
     );
-    return res.rows[0] || null;
+    return result.rows;
   },
 
-  // تحديث الفين بعد كل حركة (authoritative board)
-  async updateBoardFEN(roomId, fen) {
-    const res = await query(
-      `UPDATE games SET board_fen = $2 WHERE room_id = $1 RETURNING *`,
-      [roomId, fen]
+  async updateBoardFEN(gameId, fen, client = null) {
+    const result = await (client || { query }).query(
+      "UPDATE games SET board_fen=$2 WHERE id=$1 AND status='in_progress' RETURNING *", [gameId, fen]
     );
-    return res.rows[0] || null;
+    return requireOne(result, "update game board");
   },
 
-  // إنهاء اللعبة عن طريق id مباشرة (local games مفيش لها room_id)
-  async finishById(id, { result: gameResult, winnerColor }) {
-    const res = await query(
-      `UPDATE games
-       SET status = 'finished', result = $2, winner_color = $3, ended_at = CURRENT_TIMESTAMP
-       WHERE id = $1
-       RETURNING *`,
-      [id, gameResult, winnerColor ?? null]
+  async finishById(id, { result: gameResult, winnerColor }, client = null) {
+    const result = await (client || { query }).query(
+      `UPDATE games SET status='finished', result=$2, winner_color=$3, ended_at=CURRENT_TIMESTAMP
+       WHERE id=$1 AND status='in_progress' RETURNING *`, [id, gameResult, winnerColor ?? null]
     );
-    return res.rows[0] || null;
+    return result.rows[0] || null;
   },
-
-  // آخر ألعاب مستخدم معيّن (لصفحة الـ Profile / Replay list)
+  async finish(roomId, details) {
+    const game = await this.findByRoomId(roomId);
+    return game ? this.finishById(game.id, details) : null;
+  },
+  async abandonMany(gameIds) {
+    if (!gameIds.length) return 0;
+    const result = await query(
+      `UPDATE games SET status='abandoned', result='process_failure', ended_at=CURRENT_TIMESTAMP
+       WHERE id=ANY($1::int[]) AND status='in_progress'`, [gameIds]
+    );
+    return result.rowCount;
+  },
   async getUserGames(userId, limit = 10) {
     const result = await query(
-      `SELECT * FROM games
-       WHERE white_user_id = $1 OR black_user_id = $1
-       ORDER BY started_at DESC
-       LIMIT $2`,
+      "SELECT * FROM games WHERE white_user_id=$1 OR black_user_id=$1 ORDER BY started_at DESC LIMIT $2",
       [userId, limit]
     );
     return result.rows;
   },
-  // Run multiple DB operations in a single transaction
   async runInTransaction(callback) {
     const client = await pool.connect();
     try {
-      await client.query('BEGIN');
-      const result = await callback(client);
-      await client.query('COMMIT');
-      return result;
+      await client.query("BEGIN");
+      const value = await callback(client);
+      await client.query("COMMIT");
+      return value;
     } catch (err) {
-      await client.query('ROLLBACK');
+      try { await client.query("ROLLBACK"); } catch (_) {}
       throw err;
-    } finally {
-      client.release();
-    }
+    } finally { client.release(); }
   },
 };
-
 module.exports = Game;

@@ -1,35 +1,15 @@
-# ============================================================
-# Dockerfile — Tetris V2 (محدّث بالكامل)
-# Multi-Stage Build: Node 22 LTS → nginx:alpine
-# ============================================================
-
 FROM node:22-alpine AS builder
-
-LABEL maintainer="DevSecOps Team"
-LABEL stage="builder"
-
 WORKDIR /app
-
-COPY package*.json ./
-RUN npm install
-
-COPY . .
+COPY package.json package-lock.json ./
+RUN npm ci && npm cache clean --force
+COPY public ./public
+COPY src ./src
 RUN npm run build
 
-# ── الإنتاج ───────────────────────────────────────────────
-FROM nginx:1.27-alpine AS production
-
-LABEL maintainer="DevSecOps Team"
-LABEL app="tetris-v2"
-
-COPY --from=builder /app/build /usr/share/nginx/html
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD wget -qO- http://localhost/ || exit 1
-
-RUN chown -R nginx:nginx /usr/share/nginx/html && \
-    chmod -R 755 /usr/share/nginx/html
-
-EXPOSE 80
+FROM nginxinc/nginx-unprivileged:1.27-alpine AS production
+COPY --from=builder --chown=101:101 /app/build /usr/share/nginx/html
+COPY --chown=101:101 nginx.conf /etc/nginx/conf.d/default.conf
+USER 101:101
+EXPOSE 8080 8443
+HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=5 CMD ["nginx", "-t"]
 CMD ["nginx", "-g", "daemon off;"]

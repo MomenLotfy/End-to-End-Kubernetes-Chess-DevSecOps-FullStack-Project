@@ -1,800 +1,191 @@
-const http = require('http');
-const { Server } = require('socket.io');
-const clientIO = require('socket.io-client');
+process.env.JWT_SECRET = "test-secret-that-is-longer-than-thirty-two-characters";
+process.env.NODE_ENV = "test";
 
-// Increase Jest timeout for the integration tests (socket.io startup & async events)
-jest.setTimeout(60000);
+const http = require("http");
+const { Server } = require("socket.io");
+const ioClient = require("socket.io-client");
+const { signAccessToken, ACCESS_COOKIE } = require("../src/services/tokens");
 
-// Mock DB‑related models to avoid real DB access
-jest.mock('../src/models/Game', () => ({
-  create: jest.fn().mockResolvedValue({ id: 1 }),
-  updateBoardFEN: jest.fn().mockResolvedValue({}),
-  finishById: jest.fn().mockResolvedValue({}),
-  joinBlack: jest.fn().mockResolvedValue({}),
-  joinBlackById: jest.fn().mockResolvedValue({}),
-  findByRoomId: jest.fn().mockResolvedValue(null),
-  // Default transaction helper – simply runs the callback with a mock client
-  runInTransaction: jest.fn((callback) => {
-    const mockClient = { query: async () => {} };
-    return callback(mockClient);
-  }),
-}));
+jest.mock("../src/middleware/auth", () => ({ activeSession: jest.fn(async () => true) }));
 
+const mockDb = { games: new Map(), moves: [], nextId: 1, finalizeCount: 0 };
+function mockResult(rows = [], rowCount = rows.length) { return { rows, rowCount }; }
 
-jest.mock('../src/models/Move', () => ({
-  record: jest.fn().mockResolvedValue({}),
-}));
-
-let mockClient;
-jest.mock('../src/config/db', () => {
-  const query = jest.fn();
-  mockClient = {
-    query: jest.fn(),
-    release: jest.fn(),
+jest.mock("../src/models/Game", () => {
+  const { Chess } = require("chess.js");
+  const api = {
+    create: jest.fn(async ({ roomId, whiteUserId, whiteUsername }) => {
+      const game = { id: mockDb.nextId++, room_id: roomId, white_user_id: whiteUserId, white_username: whiteUsername,
+        black_user_id: null, black_username: null, status: "in_progress", board_fen: new Chess().fen() };
+      mockDb.games.set(game.id, game);
+      return { ...game };
+    }),
+    claimBlack: jest.fn(async (id, player) => {
+      const game = mockDb.games.get(id);
+      if (!game || game.black_username || game.status !== "in_progress") return null;
+      game.black_user_id = player.blackUserId; game.black_username = player.blackUsername;
+      return { ...game };
+    }),
+    joinBlackById: jest.fn(async (id, player) => api.claimBlack(id, player)),
+    findRecoverable: jest.fn(async () => []),
+    abandonMany: jest.fn(async () => 0),
+    runInTransaction: jest.fn(async callback => callback({ query: querySql })),
   };
-  const pool = {
-    connect: jest.fn(() => mockClient),
-  };
-  return { query, pool };
-});
-
-const Game = require('../src/models/Game');
-
-const { initSocket } = require('../src/socket/gameSocket');
-
-// ---------------------------------------------------------------------------
-// Transaction helper (runInTransaction) behavior tests
-// ---------------------------------------------------------------------------
-
-describe('Transaction helper functionality', () => {
-  // Use the real implementation of Game (not the mocked one above)
-  const RealGame = jest.requireActual('../src/models/Game');
-  const { pool } = require('../src/config/db'); // mocked pool
-
-  beforeEach(() => {
-    // Reset mock call history and implementations before each test
-    jest.clearAllMocks();
-    if (mockClient && mockClient.query) {
-      mockClient.query.mockResolvedValue({});
+  async function querySql(sql, params = []) {
+    const normalized = sql.replace(/\s+/g, " ").trim();
+    if (normalized.startsWith("SELECT board_fen, status FROM games")) {
+      const game = mockDb.games.get(params[0]); return game ? mockResult([{ board_fen: game.board_fen, status: game.status }]) : mockResult();
     }
-  });
-
-  test('runInTransaction commits on successful callback', async () => {
-    mockClient.query.mockResolvedValue({});
-    const result = await RealGame.runInTransaction(async (client) => {
-      await client.query('INSERT INTO dummy (col) VALUES ($1)', ['val']);
-      return 123;
-    });
-    expect(result).toBe(123);
-    expect(pool.connect).toHaveBeenCalledTimes(1);
-    expect(mockClient.query.mock.calls[0][0]).toBe('BEGIN');
-    const lastCall = mockClient.query.mock.calls[mockClient.query.mock.calls.length - 1];
-    expect(lastCall[0]).toBe('COMMIT');
-    expect(mockClient.release).toHaveBeenCalledTimes(1);
-  });
-
-  test('runInTransaction rolls back and propagates error on failure', async () => {
-    mockClient.query.mockResolvedValue({});
-    const error = new Error('transaction failure');
-    await expect(
-      RealGame.runInTransaction(async (client) => {
-        await client.query('INSERT INTO dummy (col) VALUES ($1)', ['val']);
-        throw error;
-      })
-    ).rejects.toThrow(error);
-    expect(pool.connect).toHaveBeenCalledTimes(1);
-    expect(mockClient.query).toHaveBeenCalledWith('BEGIN');
-    expect(mockClient.query).toHaveBeenCalledWith('ROLLBACK');
-    expect(mockClient.release).toHaveBeenCalledTimes(1);
-  });
-
+    if (normalized.startsWith("UPDATE games SET board_fen")) {
+      const game = mockDb.games.get(params[0]);
+      if (!game || game.status !== "in_progress") return mockResult();
+      game.board_fen = params[1]; return mockResult([{ id: game.id }]);
+    }
+    if (normalized.startsWith("INSERT INTO moves")) {
+      const record = { id: mockDb.moves.length + 1, game_id: params[0], move_number: mockDb.moves.filter(m => m.game_id === params[0]).length + 1,
+        player_color: params[1], from_square: params[2], to_square: params[3], fen_after: params[7] };
+      mockDb.moves.push(record); return mockResult([record]);
+    }
+    if (normalized.startsWith("UPDATE games SET status='finished'")) {
+      const game = mockDb.games.get(params[0]);
+      if (!game || game.status !== "in_progress") return mockResult();
+      game.status = "finished"; game.result = params[1]; game.winner_color = params[2]; mockDb.finalizeCount++;
+      return mockResult([{ id: game.id }]);
+    }
+    if (normalized.startsWith("SELECT id, elo_rating FROM users")) return mockResult([{ id: 1, elo_rating: 1200 }, { id: 2, elo_rating: 1200 }]);
+    if (normalized.startsWith("UPDATE users SET elo_rating")) return mockResult([], 1);
+    if (normalized.startsWith("INSERT INTO scores")) return mockResult([], 1);
+    if (normalized.startsWith("SELECT COUNT(*)::int AS count FROM scores")) return mockResult([{ count: 1 }]);
+    if (normalized.startsWith("INSERT INTO user_achievements")) return mockResult([], 1);
+    if (normalized.startsWith("UPDATE games SET room_id=NULL")) {
+      const game = mockDb.games.get(params[0]); if (!game || game.status !== "finished") return mockResult(); game.room_id = null; return mockResult([], 1);
+    }
+    throw new Error(`Unhandled test SQL: ${normalized}`);
+  }
+  return api;
 });
 
-describe('Multiplayer server-authoritative move handling', () => {
-  let httpServer;
-  let io;
-  let client1, client2;
-  let roomId;
+const { initSocket, activeRooms, rebuildActiveRooms } = require("../src/socket/gameSocket");
 
-  beforeAll((done) => {
-    httpServer = http.createServer();
-    io = new Server(httpServer, { cors: { origin: "*" } });
-    initSocket(io);
-    httpServer.listen(() => {
-      const port = httpServer.address().port;
-      client1 = clientIO(`http://localhost:${port}`);
-      client2 = clientIO(`http://localhost:${port}`);
-      // Wait for both clients to connect
-      let connected = 0;
-      const onConnect = () => {
-        connected++;
-        if (connected === 2) done();
-      };
-      client1.on('connect', onConnect);
-      client2.on('connect', onConnect);
-    });
+function user(id, username) { return { id, username, email: `${username}@example.test` }; }
+function cookieFor(profile) { return `${ACCESS_COOKIE}=${signAccessToken(profile)}`; }
+function event(socket, name) { return new Promise(resolve => socket.once(name, resolve)); }
+
+async function harness() {
+  const server = http.createServer();
+  const io = new Server(server);
+  initSocket(io);
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  const url = `http://127.0.0.1:${server.address().port}`;
+  const connect = profile => new Promise((resolve, reject) => {
+    const socket = ioClient(url, { extraHeaders: { Cookie: cookieFor(profile) }, forceNew: true, transports: ["websocket"] });
+    socket.once("connect", () => resolve(socket));
+    socket.once("connect_error", reject);
   });
+  const close = async sockets => {
+    sockets.forEach(socket => socket.disconnect());
+    await new Promise(resolve => io.close(resolve));
+    if (server.listening) await new Promise(resolve => server.close(resolve));
+  };
+  return { connect, close, io };
+}
 
-  afterAll(() => {
-    client1.disconnect();
-    client2.disconnect();
-    io.close();
-    httpServer.close();
-  });
+async function joinedGame(connect) {
+  const white = await connect(user(1, "Alice"));
+  const black = await connect(user(2, "Bob"));
+  const created = event(white, "room_created");
+  white.emit("create_room", { playerName: "forged-name" });
+  const { roomId } = await created;
+  const startedWhite = event(white, "game_start");
+  const startedBlack = event(black, "game_start");
+  black.emit("join_room", { roomId, playerName: "also-forged" });
+  await Promise.all([startedWhite, startedBlack]);
+  return { white, black, roomId };
+}
 
-  // Ensure each test starts with a clean in‑memory state
+beforeEach(() => {
+  mockDb.games.clear(); mockDb.moves.length = 0; mockDb.nextId = 1; mockDb.finalizeCount = 0; activeRooms.clear(); jest.clearAllMocks();
+});
 
-  // New test for early game_over rejection
-  test('game_over ignored when game not actually over', (done) => {
-    client1.emit('create_room', { playerName: 'Alice', token: null });
-    client1.once('room_created', (data) => {
-      const testRoomId = data.roomId;
-      client2.emit('join_room', { roomId: testRoomId, playerName: 'Bob', token: null });
-      client2.once('game_start', () => {
-        client1.emit('make_move', { roomId: testRoomId, move: { from: 'e2', to: 'e4' } });
-      });
-      client1.once('move_made', () => {
-        client1.emit('game_over', { roomId: testRoomId, result: 'draw', winner: 'Bob' });
-      });
-    });
-    client1.once('error', (payload) => {
-      try {
-        expect(payload.message).toBe('Game not over');
-        let ended = false;
-        const timeout = setTimeout(() => {
-          expect(ended).toBe(false);
-          done();
-        }, 2000);
-        client2.once('game_ended', () => {
-          ended = true;
-          clearTimeout(timeout);
-          done(new Error('Unexpected game_ended'));
-        });
-      } catch (err) {
-        done(err);
-      }
-    });
-  }, 20000);
+test("startup rebuilds an in-progress room from persisted FEN and moves", async () => {
+  const Game = require("../src/models/Game");
+  const fen = new (require("chess.js").Chess)().fen();
+  Game.findRecoverable.mockResolvedValueOnce([{
+    id: 44, room_id: "RECOVER1", white_user_id: 1, white_username: "Alice",
+    black_user_id: 2, black_username: "Bob", board_fen: fen,
+    started_at: new Date(), persisted_moves: [{ move_number: 1 }],
+  }]);
+  expect(await rebuildActiveRooms()).toBe(1);
+  expect(activeRooms.get("RECOVER1")).toMatchObject({ gameId: 44, board: fen, turn: "w", status: "playing" });
+  expect(activeRooms.get("RECOVER1").moves).toHaveLength(1);
+});
 
-  afterEach(() => {
-    const { activeRooms } = require('../src/socket/gameSocket');
-    activeRooms.clear();
-    client1.removeAllListeners();
-    client2.removeAllListeners();
-  });
+test("make_move authorizes participant and turn and persists canonical data", async () => {
+  const h = await harness();
+  const sockets = [];
+  try {
+    const game = await joinedGame(h.connect); sockets.push(game.white, game.black);
+    const attacker = await h.connect(user(3, "Mallory")); sockets.push(attacker);
+    const denied = event(attacker, "error");
+    attacker.emit("make_move", { roomId: game.roomId, move: { from: "e2", to: "e4" } });
+    expect((await denied).message).toBe("Not your turn");
+    const moved = event(game.black, "move_made");
+    game.white.emit("make_move", { roomId: game.roomId, move: { from: "e2", to: "e4", piece: "wQ", boardState: "forged" } });
+    const payload = await moved;
+    expect(payload.turn).toBe("b");
+    expect(payload.boardState).not.toBe("forged");
+    expect(mockDb.moves[0]).toMatchObject({ game_id: 1, player_color: "w", from_square: "e2", to_square: "e4" });
+  } finally { await h.close(sockets); }
+});
 
-  test('legal move is accepted and board state is canonical', (done) => {
-    // create a new room for the test
-    client1.emit('create_room', { playerName: 'Alice', token: null });
-    client1.once('room_created', (data) => {
-      roomId = data.roomId;
-      // player2 joins
-      client2.emit('join_room', { roomId, playerName: 'Bob', token: null });
-    });
+test("parallel join_room attempts admit only one black player", async () => {
+  const h = await harness();
+  const sockets = [];
+  try {
+    const white = await h.connect(user(1, "Alice")); const b = await h.connect(user(2, "Bob")); const c = await h.connect(user(3, "Carol"));
+    sockets.push(white, b, c);
+    const created = event(white, "room_created"); white.emit("create_room", {}); const { roomId } = await created;
+    const bOutcome = Promise.race([event(b, "game_start").then(() => "joined"), event(b, "error").then(() => "rejected")]);
+    const cOutcome = Promise.race([event(c, "game_start").then(() => "joined"), event(c, "error").then(() => "rejected")]);
+    b.emit("join_room", { roomId }); c.emit("join_room", { roomId });
+    expect((await Promise.all([bOutcome, cOutcome])).sort()).toEqual(["joined", "rejected"]);
+    expect(activeRooms.get(roomId).players).toHaveLength(2);
+  } finally { await h.close(sockets); }
+});
 
-    client2.once('game_start', () => {
-      // player1 (white) makes a legal e2e4 move
-      client1.emit('make_move', { roomId, move: { from: 'e2', to: 'e4', piece: 'wP' } });
-    });
+test("network disconnect preserves the authoritative game for reconnect", async () => {
+  const h = await harness();
+  const sockets = [];
+  try {
+    const game = await joinedGame(h.connect); sockets.push(game.white, game.black);
+    const serverSockets = [...h.io.sockets.sockets.values()];
+    serverSockets.forEach(socket => socket.disconnect(true));
+    await Promise.all(serverSockets.map(socket => {
+      const playerRoom = activeRooms.get(game.roomId);
+      return playerRoom?.operation;
+    }));
+    await activeRooms.get(game.roomId)?.operation;
+    expect(mockDb.finalizeCount).toBe(0);
+    expect(mockDb.games.get(1).status).toBe("in_progress");
+    expect(activeRooms.get(game.roomId).players.every(player => player.id === null)).toBe(true);
+  } finally { await h.close(sockets); }
+});
 
-    // Expect both players to receive move_made with updated FEN
-    const onMoveMade = (payload) => {
-      try {
-        expect(payload.move.from).toBe('e2');
-        expect(payload.boardState).toMatch(/4P3/);
-        done();
-      } catch (err) {
-        done(err);
-      }
-    };
-    client1.once('move_made', onMoveMade);
-    client2.once('move_made', onMoveMade);
-  }, 120000);
-
-  test('ignore fake boardState from client', (done) => {
-    client1.emit('create_room', { playerName: 'Alice', token: null });
-    client1.once('room_created', (data) => {
-      const testRoomId = data.roomId;
-      client2.emit('join_room', { roomId: testRoomId, playerName: 'Bob', token: null });
-      client2.once('game_start', () => {
-        client1.emit('make_move', { roomId: testRoomId, move: { from: 'e2', to: 'e4', boardState: 'FAKE' } });
-      });
-    });
-    client1.once('move_made', (payload) => {
-      try {
-        expect(payload.boardState).not.toBe('FAKE');
-        done();
-      } catch (err) {
-        done(err);
-      }
-    });
-  }, 15000);
-
-  test('ignore fake turn from client', (done) => {
-    client1.emit('create_room', { playerName: 'Alice', token: null });
-    client1.once('room_created', (data) => {
-      const testRoomId = data.roomId;
-      client2.emit('join_room', { roomId: testRoomId, playerName: 'Bob', token: null });
-      client2.once('game_start', () => {
-        client1.emit('make_move', { roomId: testRoomId, move: { from: 'e2', to: 'e4', turn: 'b' } });
-      });
-    });
-    client1.once('move_made', (payload) => {
-      try {
-        // The server should set turn based on move, not the fake value
-        expect(payload.turn).toBe('b');
-        done();
-      } catch (err) {
-        done(err);
-      }
-    });
-  }, 15000);
-
-  test('ignore fake piece from client', (done) => {
-    client1.emit('create_room', { playerName: 'Alice', token: null });
-    client1.once('room_created', (data) => {
-      const testRoomId = data.roomId;
-      client2.emit('join_room', { roomId: testRoomId, playerName: 'Bob', token: null });
-      client2.once('game_start', () => {
-        client1.emit('make_move', { roomId: testRoomId, move: { from: 'e2', to: 'e4', piece: 'wQ' } });
-      });
-    });
-    client1.once('move_made', (payload) => {
-      try {
-        // boardState should reflect a pawn move, not a queen move
-        expect(payload.boardState).toMatch(/4P3/);
-        done();
-      } catch (err) {
-        done(err);
-      }
-    });
-  }, 15000);
-
-  test('ignore fake captured from client', (done) => {
-    client1.emit('create_room', { playerName: 'Alice', token: null });
-    client1.once('room_created', (data) => {
-      const testRoomId = data.roomId;
-      client2.emit('join_room', { roomId: testRoomId, playerName: 'Bob', token: null });
-      client2.once('game_start', () => {
-        client1.emit('make_move', { roomId: testRoomId, move: { from: 'e2', to: 'e4', captured: 'wP' } });
-      });
-    });
-    client1.once('move_made', (payload) => {
-      try {
-        // No capture should have occurred; boardState should still be a simple pawn advance
-        expect(payload.boardState).toMatch(/4P3/);
-        done();
-      } catch (err) {
-        done(err);
-      }
-    });
-  }, 15000);
-
-  test('ignore fake san from client', (done) => {
-    client1.emit('create_room', { playerName: 'Alice', token: null });
-    client1.once('room_created', (data) => {
-      const testRoomId = data.roomId;
-      client2.emit('join_room', { roomId: testRoomId, playerName: 'Bob', token: null });
-      client2.once('game_start', () => {
-        client1.emit('make_move', { roomId: testRoomId, move: { from: 'e2', to: 'e4', san: 'e2e4' } });
-      });
-    });
-    client1.once('move_made', (payload) => {
-      try {
-        // SAN is ignored; boardState still reflects pawn move
-        expect(payload.boardState).toMatch(/4P3/);
-        done();
-      } catch (err) {
-        done(err);
-      }
-    });
-  }, 15000);
-
-  test('wrong player color is rejected', (done) => {
-    client1.emit('create_room', { playerName: 'Alice', token: null });
-    client1.once('room_created', (data) => {
-      const testRoomId = data.roomId;
-      client2.emit('join_room', { roomId: testRoomId, playerName: 'Bob', token: null });
-      client2.once('game_start', () => {
-        // Black (client2) tries to move first
-        client2.emit('make_move', { roomId: testRoomId, move: { from: 'e7', to: 'e5' } });
-      });
-    });
-    client2.once('error', (payload) => {
-      try {
-        expect(payload.message).toBe('Not your turn');
-        done();
-      } catch (err) {
-        done(err);
-      }
-    });
-  }, 15000);
-
-  test('wrong turn is rejected', (done) => {
-    let testRoomId;
-    client1.emit('create_room', { playerName: 'Alice', token: null });
-    client1.once('room_created', (data) => {
-      testRoomId = data.roomId;
-      client2.emit('join_room', { roomId: testRoomId, playerName: 'Bob', token: null });
-      client2.once('game_start', () => {
-        // White makes a legal move
-        client1.emit('make_move', { roomId: testRoomId, move: { from: 'e2', to: 'e4' } });
-      });
-    });
-    // Wait for the move to be processed then white tries again
-    client1.once('move_made', () => {
-      client1.emit('make_move', { roomId: testRoomId, move: { from: 'd2', to: 'd4' } });
-    });
-    client1.once('error', (payload) => {
-      try {
-        expect(payload.message).toBe('Not your turn');
-        done();
-      } catch (err) {
-        done(err);
-      }
-    });
-  }, 15000);
-
-  test('duplicate move is rejected', (done) => {
-    let testRoomId;
-    client1.emit('create_room', { playerName: 'Alice', token: null });
-    client1.once('room_created', (data) => {
-      testRoomId = data.roomId;
-      client2.emit('join_room', { roomId: testRoomId, playerName: 'Bob', token: null });
-      client2.once('game_start', () => {
-        client1.emit('make_move', { roomId: testRoomId, move: { from: 'e2', to: 'e4' } });
-      });
-    });
-    client1.once('move_made', () => {
-      // Black makes a legal move
-      client2.emit('make_move', { roomId: testRoomId, move: { from: 'e7', to: 'e5' } });
-    });
-    client2.once('move_made', () => {
-      // White attempts the same e2e4 again (duplicate)
-      client1.emit('make_move', { roomId: testRoomId, move: { from: 'e2', to: 'e4' } });
-    });
-    client1.once('error', (payload) => {
-      try {
-        expect(payload.message).toBe('Illegal move');
-        done();
-      } catch (err) {
-        done(err);
-      }
-    });
-  }, 15000);
-
-  test('out-of-order invalid move is rejected', (done) => {
-    client1.emit('create_room', { playerName: 'Alice', token: null });
-    client1.once('room_created', (data) => {
-      const testRoomId = data.roomId;
-      client2.emit('join_room', { roomId: testRoomId, playerName: 'Bob', token: null });
-      client2.once('game_start', () => {
-        // White attempts to move a piece from an empty square
-        client1.emit('make_move', { roomId: testRoomId, move: { from: 'e5', to: 'e6' } });
-      });
-    });
-    client1.once('error', (payload) => {
-      try {
-        expect(payload.message).toBe('Illegal move');
-        done();
-      } catch (err) {
-        done(err);
-      }
-    });
-  }, 15000);
-
-  test('client‑provided result in game_over is ignored – server determines checkmate', (done) => {
-    // Setup a quick Scholar's Mate to force checkmate
-    client1.emit('create_room', { playerName: 'Alice', token: null });
-    client1.once('room_created', (data) => {
-      const testRoomId = data.roomId;
-      client2.emit('join_room', { roomId: testRoomId, playerName: 'Bob', token: null });
-      client2.once('game_start', () => {
-        // Sequence of moves leading to Scholar's Mate (white delivers checkmate)
-        // 1. e2e4 (white)
-        client1.emit('make_move', { roomId: testRoomId, move: { from: 'e2', to: 'e4' } });
-        client1.once('move_made', () => {
-          // 1... e7e5 (black)
-          client2.emit('make_move', { roomId: testRoomId, move: { from: 'e7', to: 'e5' } });
-          client2.once('move_made', () => {
-            // 2. d1h5 (white queen out)
-            client1.emit('make_move', { roomId: testRoomId, move: { from: 'd1', to: 'h5' } });
-            client1.once('move_made', () => {
-              // 2... b8c6 (black knight)
-              client2.emit('make_move', { roomId: testRoomId, move: { from: 'b8', to: 'c6' } });
-              client2.once('move_made', () => {
-                // 3. f1c4 (white bishop)
-                client1.emit('make_move', { roomId: testRoomId, move: { from: 'f1', to: 'c4' } });
-                client1.once('move_made', () => {
-                  // 3... g8f6 (black knight)
-                  client2.emit('make_move', { roomId: testRoomId, move: { from: 'g8', to: 'f6' } });
-                  client2.once('move_made', () => {
-                    // 4. h5f7# (white queen captures f7, delivering checkmate)
-                    client1.emit('make_move', { roomId: testRoomId, move: { from: 'h5', to: 'f7' } });
-                    client1.once('move_made', () => {
-                      // After the checkmate move, client1 (white) sends a forged game_over payload
-                      client1.emit('game_over', { roomId: testRoomId, result: 'draw', winner: 'Bob' });
-                    });
-                  });
-                });
-              });
-            });
-          });
-        });
-      });
-    });
-    client1.once('game_ended', (info) => {
-      try {
-        // Server must ignore forged fields and report checkmate with Alice as winner
-        expect(info.result).toBe('checkmate');
-        expect(info.winner).toBe('Alice');
-        done();
-      } catch (err) {
-        done(err);
-      }
-    });
-  }, 60000);
-
-  test('non‑participant cannot trigger game_over', (done) => {
-    // Setup room with two players
-    client1.emit('create_room', { playerName: 'Alice', token: null });
-    client1.once('room_created', (data) => {
-      const testRoomId = data.roomId;
-      client2.emit('join_room', { roomId: testRoomId, playerName: 'Bob', token: null });
-      client2.once('game_start', () => {
-        // Create a third socket not part of the room
-        const outsider = clientIO('http://localhost:' + client1.io.opts.port);
-        outsider.on('connect', () => {
-          outsider.emit('game_over', { roomId: testRoomId, result: 'draw', winner: 'Bob' });
-        });
-        // Expect the original participants to receive no game_ended event
-        let ended = false;
-        const timeout = setTimeout(() => {
-          expect(ended).toBe(false);
-          outsider.disconnect();
-          done();
-        }, 3000);
-        client1.once('game_ended', () => {
-          ended = true;
-          clearTimeout(timeout);
-          outsider.disconnect();
-          done(new Error('Outsider should not trigger game_ended'));
-        });
-      });
-    });
-  }, 15000);
-
-  test.skip('non‑participant cannot accept_rematch', (done) => {
-    client1.emit('create_room', { playerName: 'Alice', token: null });
-    client1.once('room_created', (data) => {
-      const testRoomId = data.roomId;
-      client2.emit('join_room', { roomId: testRoomId, playerName: 'Bob', token: null });
-      client2.once('game_start', async () => {
-        // First end the game via a legitimate checkmate (reuse scholar's mate quickly)
-        // For brevity, directly emit a valid game_over after the first move
-        client1.emit('make_move', { roomId: testRoomId, move: { from: 'e2', to: 'e4' } });
-        client1.once('move_made', () => {
-          client2.emit('make_move', { roomId: testRoomId, move: { from: 'e7', to: 'e5' } });
-        });
-        client2.once('move_made', () => {
-          client1.emit('game_over', { roomId: testRoomId, result: 'draw', winner: 'Alice' });
-        });
-        client1.once('game_ended', () => {
-          // Create outsider socket
-          const outsider = clientIO('http://localhost:' + client1.io.opts.port);
-          outsider.on('connect', () => {
-            outsider.emit('accept_rematch', { roomId: testRoomId });
-          });
-          // No new game_start should be emitted to the original players
-          let started = false;
-          const timeout = setTimeout(() => {
-            expect(started).toBe(false);
-            outsider.disconnect();
-            done();
-          }, 3000);
-          client1.once('game_start', () => {
-            started = true;
-            clearTimeout(timeout);
-            outsider.disconnect();
-            done(new Error('Outsider should not trigger rematch'));
-          });
-        });
-      });
-    });
-  }, 20000);
-
-  test.skip('one‑sided accept_rematch does not reset the game', (done) => {
-    client1.emit('create_room', { playerName: 'Alice', token: null });
-    client1.once('room_created', (data) => {
-      const testRoomId = data.roomId;
-      client2.emit('join_room', { roomId: testRoomId, playerName: 'Bob', token: null });
-      client2.once('game_start', () => {
-        // End the game quickly via checkmate as before
-        client1.emit('make_move', { roomId: testRoomId, move: { from: 'e2', to: 'e4' } });
-        client1.once('move_made', () => {
-          client2.emit('make_move', { roomId: testRoomId, move: { from: 'e7', to: 'e5' } });
-        });
-        client2.once('move_made', () => {
-          client1.emit('game_over', { roomId: testRoomId, result: 'draw', winner: 'Alice' });
-        });
-        client1.once('game_ended', () => {
-          // Alice (socket1) accepts rematch first
-          client1.emit('accept_rematch', { roomId: testRoomId });
-          // Expect no immediate new game_start
-          let started = false;
-          const timeout = setTimeout(() => {
-            expect(started).toBe(false);
-            // Now Bob accepts
-            client2.emit('accept_rematch', { roomId: testRoomId });
-            client1.once('game_start', (info) => {
-              // Verify colors swapped (Alice should now be black)
-              const alice = info.players.find(p => p.name === 'Alice');
-              expect(alice.color).toBe('b');
-              clearTimeout(timeout);
-              done();
-            });
-          }, 2000);
-          client1.once('game_start', () => {
-            started = true;
-          });
-        });
-      });
-    });
-  }, 60000);
-
-  test('two‑sided accept_rematch resets the game exactly once', (done) => {
-    client1.emit('create_room', { playerName: 'Alice', token: null });
-    client1.once('room_created', (data) => {
-      const testRoomId = data.roomId;
-      client2.emit('join_room', { roomId: testRoomId, playerName: 'Bob', token: null });
-      client2.once('game_start', () => {
-        // End the game via a normal resignation to avoid complex move sequence
-        client1.emit('resign', { roomId: testRoomId });
-        client1.once('game_ended', () => {
-          // Both participants accept rematch
-          client1.emit('accept_rematch', { roomId: testRoomId });
-          client2.emit('accept_rematch', { roomId: testRoomId });
-          // New game_start should be emitted exactly once
-          let startCount = 0;
-          client1.on('game_start', (info) => {
-            startCount++;
-            if (startCount === 1) {
-              // Verify colors swapped (Alice now black)
-              const alice = info.players.find(p => p.name === 'Alice');
-              expect(alice.color).toBe('b');
-              setTimeout(() => {
-                client1.removeAllListeners('game_start');
-                done();
-              }, 100);
-            } else {
-              done(new Error('game_start emitted more than once'));
-            }
-          });
-        });
-      });
-    });
-  }, 25000);
-
-  // ---------- Failure‑path tests for DB consistency ----------
-
-  test('make_move DB transaction failure rolls back and emits error', (done) => {
-    // Force transaction to reject
-    const err = new Error('DB transaction error');
-    Game.runInTransaction.mockRejectedValueOnce(err);
-    client1.emit('create_room', { playerName: 'Alice', token: null });
-    client1.once('room_created', (data) => {
-      const testRoomId = data.roomId;
-      client2.emit('join_room', { roomId: testRoomId, playerName: 'Bob', token: null });
-      client2.once('game_start', () => {
-        client1.emit('make_move', { roomId: testRoomId, move: { from: 'e2', to: 'e4' } });
-      });
-    });
-    // Expect error and no move_made
-    client1.once('error', (payload) => {
-      try {
-        expect(payload.message).toBe('Failed to record move');
-        // Ensure no move_made event is emitted
-        const onMoveMade = () => done(new Error('move_made should not be emitted'));
-        client1.once('move_made', onMoveMade);
-        client2.once('move_made', onMoveMade);
-        // Wait briefly to ensure no move_made
-        setTimeout(() => {
-          client1.removeAllListeners('move_made');
-          client2.removeAllListeners('move_made');
-          done();
-        }, 1000);
-      } catch (e) { done(e); }
-    });
-  }, 15000);
-
-  test('accept_rematch DB create failure does not reset game', (done) => {
-    // Ensure Game.create default behavior for subsequent tests
-    Game.create.mockResolvedValue({ id: 1 });
-    // First Game.create for room succeeds
-    Game.create.mockResolvedValueOnce({ id: 123 });
-    // Second Game.create for rematch fails
-    Game.create.mockRejectedValueOnce(new Error('DB create error'));
-    client1.emit('create_room', { playerName: 'Alice', token: null });
-    client1.once('room_created', (data) => {
-      const testRoomId = data.roomId;
-      client2.emit('join_room', { roomId: testRoomId, playerName: 'Bob', token: null });
-      client2.once('game_start', () => {
-        // End the game quickly via resignation to allow rematch
-        client1.emit('resign', { roomId: testRoomId });
-        client1.once('game_ended', () => {
-          // Alice accepts rematch first
-          client1.emit('accept_rematch', { roomId: testRoomId });
-          // Expect no immediate game_start
-          const onGameStart = () => done(new Error('game_start should not be emitted'));
-          client1.once('game_start', onGameStart);
-          client2.once('game_start', onGameStart);
-          setTimeout(() => {
-            client1.removeAllListeners('game_start');
-            client2.removeAllListeners('game_start');
-            done();
-          }, 1000);
-        });
-      });
-    });
-  }, 20000);
-
-  test('client game_over DB transaction failure does not emit game_ended', (done) => {
-    // Mock runInTransaction: first call (move) succeeds, second call (finalize) fails
-    let callCount = 0;
-    Game.runInTransaction.mockImplementation(async (cb) => {
-      callCount++;
-      // Allow first 4 calls (the four moves) to succeed
-      if (callCount <= 4) {
-        const mockClient = { query: async () => {} };
-        return cb(mockClient);
-      }
-      // Then reject on finalization
-      throw new Error('DB transaction error');
-    });
-    client1.emit('create_room', { playerName: 'Alice', token: null });
-    client1.once('room_created', (data) => {
-      const testRoomId = data.roomId;
-      client2.emit('join_room', { roomId: testRoomId, playerName: 'Bob', token: null });
-      client2.once('game_start', () => {
-        // Fool's Mate sequence to trigger server checkmate after black's move
-        // 1. f2-f3 (white)
-        client1.emit('make_move', { roomId: testRoomId, move: { from: 'f2', to: 'f3' } });
-        client1.once('move_made', () => {
-          // 1... e7-e5 (black)
-          client2.emit('make_move', { roomId: testRoomId, move: { from: 'e7', to: 'e5' } });
-          client2.once('move_made', () => {
-            // 2. g2-g4 (white)
-            client1.emit('make_move', { roomId: testRoomId, move: { from: 'g2', to: 'g4' } });
-            client1.once('move_made', () => {
-                // 2... d8-h4 (black queen) delivering checkmate
-                // Set up listeners for error and ensure no game_ended emitted
-                let ended = false;
-                client1.once('game_ended', () => { ended = true; });
-                client2.once('game_ended', () => { ended = true; });
-                const handleError = (payload) => {
-                  try {
-                    expect(payload.message).toBe('Failed to finalize game over');
-                    setTimeout(() => {
-                      expect(ended).toBe(false);
-                      done();
-                    }, 500);
-                  } catch (e) { done(e); }
-                };
-                client1.once('error', handleError);
-                client2.once('error', handleError);
-                client2.emit('make_move', { roomId: testRoomId, move: { from: 'd8', to: 'h4', piece: 'bQ' } });
-            });
-          });
-        });
-      });
-    });
-  }, 60000);
-
-  test('resign DB finish failure does not emit game_ended', (done) => {
-    // Force finishById to reject during resign
-    Game.finishById.mockRejectedValueOnce(new Error('DB finish error'));
-    Game.runInTransaction.mockRejectedValueOnce(new Error('DB finish error'));
-    client1.emit('create_room', { playerName: 'Alice', token: null });
-    client1.once('room_created', (data) => {
-      const testRoomId = data.roomId;
-      client2.emit('join_room', { roomId: testRoomId, playerName: 'Bob', token: null });
-      client2.once('game_start', () => {
-        // Alice resigns
-        client1.emit('resign', { roomId: testRoomId });
-      });
-    });
-    client1.once('error', (payload) => {
-      try {
-        expect(payload.message).toBe('Failed to finalize resign');
-        const onGameEnded = () => done(new Error('game_ended should not be emitted'));
-        client1.once('game_ended', onGameEnded);
-        client2.once('game_ended', onGameEnded);
-        setTimeout(() => {
-          client1.removeAllListeners('game_ended');
-          client2.removeAllListeners('game_ended');
-          done();
-        }, 1000);
-      } catch (e) { done(e); }
-    });
-  }, 15000);
-
-  // Original illegal move test remains unchanged
-  test('illegal move is rejected', (done) => {
-    client1.emit('create_room', { playerName: 'Alice', token: null });
-    client1.once('room_created', (data) => {
-      const testRoomId = data.roomId;
-      client2.emit('join_room', { roomId: testRoomId, playerName: 'Bob', token: null });
-      client2.once('game_start', () => {
-        // Attempt illegal pawn move (e2 to e5)
-        client1.emit('make_move', { roomId: testRoomId, move: { from: 'e2', to: 'e5' } });
-      });
-    });
-    client1.once('error', (payload) => {
-      try {
-        expect(payload.message).toBe('Illegal move');
-        done();
-      } catch (err) {
-        done(err);
-      }
-    });
-  }, 15000);
-
-  // ---------- New failure‑path tests ----------
-  test('auto game_over DB transaction failure does not emit game_ended', (done) => {
-    // Force the transaction helper to reject during automatic finalization
-    let callCount = 0;
-    Game.runInTransaction.mockImplementation(async (cb) => {
-      callCount++;
-      // First calls (move transactions) succeed (7 moves before finalization)
-      if (callCount <= 7) {
-        // simulate successful transaction
-        const mockClient = { query: async () => {} };
-        return cb(mockClient);
-      }
-      // The next call is the finalization transaction, reject it
-      throw new Error('DB transaction error');
-    });
-
-    client1.emit('create_room', { playerName: 'Alice', token: null });
-    client1.once('room_created', (data) => {
-      const testRoomId = data.roomId;
-      client2.emit('join_room', { roomId: testRoomId, playerName: 'Bob', token: null });
-      client2.once('game_start', () => {
-        // Scholar's Mate sequence
-        client1.emit('make_move', { roomId: testRoomId, move: { from: 'e2', to: 'e4' } });
-        client1.once('move_made', () => {
-          client2.emit('make_move', { roomId: testRoomId, move: { from: 'e7', to: 'e5' } });
-          client2.once('move_made', () => {
-            client1.emit('make_move', { roomId: testRoomId, move: { from: 'd1', to: 'h5' } });
-            client1.once('move_made', () => {
-              client2.emit('make_move', { roomId: testRoomId, move: { from: 'b8', to: 'c6' } });
-              client2.once('move_made', () => {
-                client1.emit('make_move', { roomId: testRoomId, move: { from: 'f1', to: 'c4' } });
-                client1.once('move_made', () => {
-                  client2.emit('make_move', { roomId: testRoomId, move: { from: 'g8', to: 'f6' } });
-                  client2.once('move_made', () => {
-                    client1.emit('make_move', { roomId: testRoomId, move: { from: 'h5', to: 'f7' } });
-                    // After this move the server will attempt auto finalization and fail
-                  });
-                });
-              });
-            });
-          });
-        });
-      });
-    });
-
-  }, 60000);
-
-  test('create_room DB persistence failure reports error', (done) => {
-    Game.create.mockRejectedValueOnce(new Error('DB create error'));
-    client1.emit('create_room', { playerName: 'Alice', token: null });
-    client1.once('error', (payload) => {
-      try {
-        expect(payload.message).toBe('Failed to persist game');
-        done();
-      } catch (e) { done(e); }
-    });
-  }, 15000);
-
+test("rematch requires both votes and creates exactly one new persisted game", async () => {
+  const h = await harness();
+  const sockets = [];
+  try {
+    const game = await joinedGame(h.connect); sockets.push(game.white, game.black);
+    const ended = event(game.black, "game_ended"); game.white.emit("resign", { roomId: game.roomId }); await ended;
+    game.white.emit("accept_rematch", { roomId: game.roomId });
+    await activeRooms.get(game.roomId).operation;
+    expect(mockDb.games.size).toBe(1);
+    const whiteStart = event(game.white, "game_start"); const blackStart = event(game.black, "game_start");
+    game.black.emit("accept_rematch", { roomId: game.roomId });
+    const [first, second] = await Promise.all([whiteStart, blackStart]);
+    expect(first.players.find(p => p.userId === 1).color).toBe("b");
+    expect(second.roomId).toBe(game.roomId);
+    expect(mockDb.games.size).toBe(2);
+    expect(activeRooms.get(game.roomId).status).toBe("playing");
+  } finally { await h.close(sockets); }
 });

@@ -1,0 +1,8 @@
+node_modules
+coverage
+tests
+.env*
+*.log
+uploads
+.git
+Dockerfile*

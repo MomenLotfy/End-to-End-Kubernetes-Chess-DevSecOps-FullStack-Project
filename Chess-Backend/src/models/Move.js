@@ -7,14 +7,15 @@ const { query } = require("../config/db");
 const Move = {
 
   // تسجيل حركة واحدة
-  async record({ gameId, moveNumber, playerColor, from, to, piece, capturedPiece, san, fenAfter }) {
-    const result = await query(
+  async record({ gameId, moveNumber, playerColor, from, to, piece, capturedPiece, san, fenAfter }, client = null) {
+    const result = await (client || { query }).query(
       `INSERT INTO moves
          (game_id, move_number, player_color, from_square, to_square, piece, captured_piece, san, fen_after)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING *`,
       [gameId, moveNumber, playerColor, from, to, piece, capturedPiece ?? null, san ?? null, fenAfter ?? null]
     );
+    if (result.rowCount !== 1) throw new Error(`record move affected ${result.rowCount} rows`);
     return result.rows[0];
   },
 

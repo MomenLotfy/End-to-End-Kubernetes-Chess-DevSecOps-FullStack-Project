@@ -31,7 +31,7 @@ router.post("/", authMiddleware, [
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+    if (!errors.isEmpty()) return res.status(400).json({ error: "Invalid request" });
 
     const tournament = await Tournament.create(req.user.id, req.body.name, req.body.maxPlayers);
     logger.info(`Tournament created: ${tournament.name} by ${req.user.username}`);
@@ -84,7 +84,7 @@ router.post("/matches/:matchId/report", authMiddleware, [
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+    if (!errors.isEmpty()) return res.status(400).json({ error: "Invalid request" });
 
     const result = await Tournament.reportResult(req.params.matchId, req.user.id, req.body.winnerId);
     if (result.error) return res.status(400).json({ error: result.error });

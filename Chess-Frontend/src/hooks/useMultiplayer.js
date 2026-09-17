@@ -10,6 +10,8 @@ export default function useMultiplayer(myName, token) {
   const socketRef = useRef(null);
   const [phase, setPhase]     = useState("idle"); // idle | waiting | playing | ended
   const [roomId, setRoomId]   = useState(null);
+  const roomIdRef = useRef(null);
+  roomIdRef.current = roomId;
   const [myColor, setMyColor] = useState(null);
   const [players, setPlayers] = useState([]);
   const [chat, setChat]       = useState([]);
@@ -39,20 +41,23 @@ export default function useMultiplayer(myName, token) {
   useEffect(() => {
     const s = getSocket();
     socketRef.current = s;
-    if (!s.connected) s.connect();
 
+    const onConnect = () => {
+      if (roomIdRef.current) s.emit("join_room", { roomId: roomIdRef.current });
+    };
     const onRoomCreated = ({ roomId, color }) => { setRoomId(roomId); setMyColor(color); setPhase("waiting"); };
 
-    const onGameStart = ({ roomId: rid, players: pls, turn }) => {
+    const onGameStart = ({ roomId: rid, players: pls, boardState, moveHistory = [] }) => {
       setRoomId(rid); setPlayers(pls); setPhase("playing"); setEndInfo(null);
       setOpponentDisconnected(false); setRematchOffered(false); setRematchRequested(false);
-      gameRef.current.reset();
+      if (boardState && moveHistory.length) gameRef.current.loadFEN(boardState, moveHistory);
+      else gameRef.current.reset();
       const me = pls.find(p => p.name === myName);
       if (me) setMyColor(me.color);
     };
 
-    const onMoveMade = ({ move }) => {
-      gameRef.current.applyRemoteMove({ from: move.from, to: move.to, promotion: move.promotion });
+    const onMoveMade = ({ boardState, moveHistory = [] }) => {
+      if (boardState) gameRef.current.loadFEN(boardState, moveHistory);
     };
 
     const onGameEnded = (info) => { setEndInfo(info); setPhase("ended"); };
@@ -61,6 +66,7 @@ export default function useMultiplayer(myName, token) {
     const onErr = ({ message }) => setErrorMsg(message);
     const onRematchRequested = () => setRematchOffered(true);
 
+    s.on("connect", onConnect);
     s.on("room_created", onRoomCreated);
     s.on("game_start", onGameStart);
     s.on("move_made", onMoveMade);
@@ -69,8 +75,10 @@ export default function useMultiplayer(myName, token) {
     s.on("chat_message", onChatMessage);
     s.on("error", onErr);
     s.on("rematch_requested", onRematchRequested);
+    if (!s.connected) s.connect();
 
     return () => {
+      s.off("connect", onConnect);
       s.off("room_created", onRoomCreated);
       s.off("game_start", onGameStart);
       s.off("move_made", onMoveMade);
@@ -97,15 +105,17 @@ export default function useMultiplayer(myName, token) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [game.status]);
 
-  const createRoom = (name) => { setErrorMsg(""); socketRef.current?.emit("create_room", { playerName: name, token }); };
-  const joinRoom = (rid, name) => { setErrorMsg(""); setRoomId(rid); socketRef.current?.emit("join_room", { roomId: rid, playerName: name, token }); };
+  const createRoom = (name) => { setErrorMsg(""); socketRef.current?.emit("create_room", { playerName: name }); };
+  const joinRoom = (rid, name) => { setErrorMsg(""); setRoomId(rid); socketRef.current?.emit("join_room", { roomId: rid, playerName: name }); };
   const resign = () => socketRef.current?.emit("resign", { roomId });
   const requestRematch = () => { socketRef.current?.emit("request_rematch", { roomId }); setRematchRequested(true); };
   const acceptRematch = () => socketRef.current?.emit("accept_rematch", { roomId });
   const sendMessage = (text) => socketRef.current?.emit("send_message", { roomId, text });
 
   const leaveRoom = () => {
-    socketRef.current?.disconnect();
+    if (roomIdRef.current && socketRef.current?.connected) {
+      socketRef.current.emit("leave_room", { roomId: roomIdRef.current }, () => {});
+    }
     setPhase("idle"); setRoomId(null); setMyColor(null); setPlayers([]);
     setChat([]); setEndInfo(null); setOpponentDisconnected(false);
     setRematchOffered(false); setRematchRequested(false);

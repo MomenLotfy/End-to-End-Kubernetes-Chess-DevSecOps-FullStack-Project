@@ -1,7 +1,6 @@
 // src/components/AIPlay.js
 import { useState, useEffect, useRef } from "react";
 import { useSettings } from "../contexts/SettingsContext";
-import { saveScore } from "../api/client";
 import useChessGame from "../hooks/useChessGame";
 import useStockfish from "../hooks/useStockfish";
 import { boardToFEN, squareToRC } from "../engine/chessEngine";
@@ -22,7 +21,7 @@ const DIFFICULTIES = [
 // ============================================================
 // components/AIPlay.js — Chess AI (Stockfish) + Move Hints
 // ============================================================
-export default function AIPlay({ token, onExit }) {
+export default function AIPlay({ onExit }) {
   const { colors: C } = useSettings();
   const [started, setStarted] = useState(false);
   const [difficulty, setDifficulty] = useState(DIFFICULTIES[1]);
@@ -32,11 +31,7 @@ export default function AIPlay({ token, onExit }) {
 
   const { thinking, error: engineError, requestMove } = useStockfish();
 
-  const game = useChessGame({
-    onGameFinished: ({ moveCount, duration, winner, moveHistory }) => {
-      saveScore(token, { moves: moveCount, duration, winner, moveHistory, mode: "ai" });
-    },
-  });
+  const game = useChessGame();
 
   const aiColor = myColor === "w" ? "b" : "w";
   const isAiTurn = started && game.turn === aiColor && !game.promo && !game.status?.match(/checkmate|stalemate|timeout/);
@@ -94,7 +89,7 @@ export default function AIPlay({ token, onExit }) {
             <Button variant="secondary" style={{ flex: 1 }} onClick={() => startGame("b")}>Black</Button>
           </div>
 
-          {engineError && <div style={{ color: C.danger, fontSize: "var(--fs-caption)", textAlign: "center" }}>{engineError} — check your internet connection (the engine loads from a CDN).</div>}
+          {engineError && <div style={{ color: C.danger, fontSize: "var(--fs-caption)", textAlign: "center" }}>{engineError} — the local chess engine could not start.</div>}
         </div>
         <Button variant="ghost" size="sm" onClick={onExit}><Icon name="back" size={24} /> MENU</Button>
       </div>

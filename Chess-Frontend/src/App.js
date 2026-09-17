@@ -1,13 +1,13 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { SettingsProvider } from "./contexts/SettingsContext";
-import { getStoredUser, getStoredToken, clearAuth } from "./utils/authStorage";
-import { saveScore } from "./api/client";
+import { getStoredUser, getStoredToken, storeAuth, clearAuth } from "./utils/authStorage";
+import { refreshSession, logout as logoutRequest } from "./api/client";
 import useChessGame from "./hooks/useChessGame";
 import HomeScreen from "./components/HomeScreen";
 import GameScreen from "./components/GameScreen";
 import OnlinePlay from "./components/OnlinePlay";
 import AIPlay from "./components/AIPlay";
-import AchievementToast from "./components/AchievementToast";
+import AccountAction from "./components/AccountAction";
 
 // ============================================================
 // App.js — Chess Frontend (Full-Stack Version)
@@ -21,27 +21,47 @@ import AchievementToast from "./components/AchievementToast";
 //   components/ الشاشات والعناصر المرئية
 // ============================================================
 function AppInner() {
+  const accountAction = ["/verify-email", "/reset-password"].includes(window.location.pathname);
   const [screen, setScreen] = useState("home"); // home | local | online
   const [timerMinutes, setTimerMinutes] = useState(null);
   const [user, setUser] = useState(getStoredUser);
   const [token, setToken] = useState(getStoredToken);
-  const [newAchievements, setNewAchievements] = useState([]);
+  const [sessionReady, setSessionReady] = useState(accountAction);
 
-  const logout = () => { clearAuth(); setUser(null); setToken(null); };
+  useEffect(() => {
+    if (accountAction) return;
+    let active = true;
+    refreshSession()
+      .then(({ user: restoredUser }) => {
+        if (!active) return;
+        storeAuth(restoredUser);
+        setUser(restoredUser);
+        setToken(true);
+      })
+      .catch(() => {
+        if (!active) return;
+        clearAuth();
+        setUser(null);
+        setToken(false);
+      })
+      .finally(() => { if (active) setSessionReady(true); });
+    return () => { active = false; };
+  }, [accountAction]);
+
+  const logout = async () => {
+    try { await logoutRequest(); } catch (_) { /* Local logout still completes if the network is unavailable. */ }
+    clearAuth(); setUser(null); setToken(null);
+  };
   const onAuth = (u) => { setUser(u); setToken(getStoredToken()); };
 
-  const game = useChessGame({
-    onGameFinished: async ({ moveCount, duration, winner, moveHistory }) => {
-      const result = await saveScore(token, { moves: moveCount, duration, winner, moveHistory });
-      if (result?.newAchievements?.length) setNewAchievements(result.newAchievements);
-    },
-  });
+  const game = useChessGame();
 
   const playLocal = (minutes) => { setTimerMinutes(minutes); setScreen("local"); game.reset(); };
 
+  if (accountAction) return <AccountAction />;
+  if (!sessionReady) return null;
   return (
     <>
-      <AchievementToast keys={newAchievements} onDone={() => setNewAchievements([])} />
       {screen === "home" && (
         <HomeScreen user={user} token={token} onLogout={logout} onAuthSuccess={onAuth} onPlayLocal={playLocal} onPlayOnline={() => setScreen("online")} onPlayAI={() => setScreen("ai")} />
       )}
@@ -52,7 +72,7 @@ function AppInner() {
         <OnlinePlay user={user} token={token} onExit={() => setScreen("home")} />
       )}
       {screen === "ai" && (
-        <AIPlay token={token} onExit={() => setScreen("home")} />
+        <AIPlay onExit={() => setScreen("home")} />
       )}
     </>
   );

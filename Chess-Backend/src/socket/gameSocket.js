@@ -1,574 +1,428 @@
-// ============================================================
-// socket/gameSocket.js — Socket.io Multiplayer Handler
-// Server-authoritative: the client only ever sends *intent*
-// ({ roomId, move: { from, to, promotion } }). Every fact about the
-// game — legality, turn, board state, FEN, SAN, captures, checkmate,
-// draw, winner, result and ELO — is derived and persisted server-side.
-// ============================================================
+const cookie = require("cookie");
+const { Chess } = require("chess.js");
 const logger = require("../config/logger");
 const Game = require("../models/Game");
-const Move = require("../models/Move");
 const { computeNewRatings } = require("../utils/elo");
-const { Chess } = require("chess.js");
+const { ACCESS_COOKIE, verifyAccessToken } = require("../services/tokens");
+const { activeSession } = require("../middleware/auth");
 
-// Active rooms stored in memory for fast access. Every field that
-// matters for gameplay (board, turn, status) is only ever advanced
-// AFTER the corresponding Postgres transaction has committed — memory
-// never runs ahead of the database.
 const activeRooms = new Map();
 
-// Decode JWT to get user id (if provided)
-const cleanPlayerName = (name) => (typeof name === "string" ? name.trim().slice(0, 40) : "");
-
-// Generate a unique room identifier
-const generateRoomId = () => Math.random().toString(36).substring(2, 8).toUpperCase();
-
-// Schedule (non-authoritative) cleanup of a finished room's in-memory
-// bookkeeping. This is bookkeeping housekeeping only — it never
-// participates in deciding game outcome or in resolving any race; all
-// of that is already settled by the time this timer is set.
-const scheduleRoomCleanup = (roomId, delayMs = 60000) => {
-  const timer = setTimeout(() => {
-    activeRooms.delete(roomId);
-    logger.info(`Room ${roomId} deleted`);
-  }, delayMs);
-  timer.unref();
-};
-
-// ------------------------------------------------------------------
-// Atomic finalization: finish the game and (if both players are
-// registered users) settle ELO, all inside a single Postgres
-// transaction. Guarded against double finalization by:
-//   1. an in-memory `room.finalizing` flag (checked synchronously
-//      before the first await, so no two calls for the same room can
-//      ever both pass the guard), and
-//   2. the `status = 'in_progress'` condition inside
-//      Game.finishByIdWithClient's UPDATE, which is the real,
-//      transaction-safe guard against races across processes.
-// game_ended is only ever emitted after the transaction commits.
-// ------------------------------------------------------------------
-async function finalizeGame(io, room, result, winnerColor, winner) {
-  if (room.status === "finished" || room.finalizing) {
-    throw new Error("ALREADY_FINALIZED");
-  }
-  room.finalizing = true;
-
-  let finalization;
+async function socketAuthentication(socket, next) {
   try {
-    finalization = await Game.runInTransaction(async (client) => {
-      await Game.finishByIdWithClient(client, room.gameId, { result, winnerColor });
-
-      const whitePlayer = room.players.find((p) => p.color === "w");
-      const blackPlayer = room.players.find((p) => p.color === "b");
-      let eloChange = null;
-
-      // ELO only settles when both seats are still occupied by
-      // registered users at finalization time. A disconnect removes
-      // the disconnecting player from room.players before calling
-      // this function specifically so that this branch is skipped —
-      // disconnect never changes rating, by construction.
-      if (whitePlayer?.userId && blackPlayer?.userId) {
-        const whiteUser = await Game.getUserForUpdateWithClient(client, whitePlayer.userId);
-        const blackUser = await Game.getUserForUpdateWithClient(client, blackPlayer.userId);
-        const scoreWhite = winnerColor === "w" ? 1 : winnerColor === "b" ? 0 : 0.5;
-        const [newWhiteElo, newBlackElo] = computeNewRatings(
-          whiteUser.elo_rating,
-          blackUser.elo_rating,
-          scoreWhite
-        );
-        const updatedWhite = await Game.updateEloWithClient(client, whiteUser.id, newWhiteElo);
-        const updatedBlack = await Game.updateEloWithClient(client, blackUser.id, newBlackElo);
-        eloChange = {
-          white: { username: whitePlayer.name, old: whiteUser.elo_rating, new: updatedWhite.elo_rating },
-          black: { username: blackPlayer.name, old: blackUser.elo_rating, new: updatedBlack.elo_rating },
-        };
-      }
-
-      return { eloChange };
-    });
+    const cookies = cookie.parse(socket.handshake.headers.cookie || "");
+    if (!cookies[ACCESS_COOKIE]) return next(new Error("Authentication required"));
+    const payload = verifyAccessToken(cookies[ACCESS_COOKIE]);
+    if (!await activeSession(payload)) return next(new Error("Authentication required"));
+    socket.data.user = payload;
+    next();
   } catch (err) {
-    // Transaction failed (or rolled back): room stays exactly as it
-    // was — still not finished — so it matches the database, and a
-    // later action (another resign/game_over/disconnect) can retry.
-    room.finalizing = false;
-    throw err;
+    logger.warn(`Socket authentication rejected: ${err.name}`);
+    next(new Error("Authentication required"));
   }
+}
 
-  // Commit succeeded — now, and only now, advance authoritative memory.
-  room.status = "finished";
-  room.finalizing = false;
+function roomTask(room, task) {
+  const run = room.operation.then(task, task);
+  room.operation = run.catch(err => logger.error(`Room ${room.id} operation failed`, { error: err.stack }));
+  return run;
+}
 
-  io.to(room.id).emit("game_ended", {
+function publicPlayers(room) {
+  return room.players.map(({ id, name, color, userId }) => ({ id, name, color, userId }));
+}
+
+async function rebuildActiveRooms() {
+  activeRooms.clear();
+  const games = await Game.findRecoverable();
+  for (const game of games) {
+    let chess;
+    try {
+      const persistedMoves = game.persisted_moves || [];
+      const checkpoint = game.board_fen || persistedMoves.at(-1)?.fen_after;
+      if (checkpoint) {
+        chess = new Chess(checkpoint);
+      } else {
+        chess = new Chess();
+        for (const move of persistedMoves) {
+          const replayed = chess.move({ from: move.from_square, to: move.to_square, promotion: move.promotion || undefined });
+          if (!replayed) throw new Error(`Illegal persisted move ${move.move_number}`);
+        }
+      }
+    } catch (err) {
+      logger.error(`Cannot recover game ${game.id}: invalid FEN`, { error: err.message });
+      await Game.abandonMany([game.id]);
+      continue;
+    }
+    const players = [{ id: null, name: game.white_username, color: "w", userId: game.white_user_id }];
+    if (game.black_username) players.push({ id: null, name: game.black_username, color: "b", userId: game.black_user_id });
+    activeRooms.set(game.room_id, {
+      id: game.room_id,
+      gameId: game.id,
+      players,
+      chess,
+      board: chess.fen(),
+      turn: chess.turn(),
+      status: players.length === 2 ? "playing" : "waiting",
+      moves: game.persisted_moves || [],
+      createdAt: new Date(game.started_at).getTime(),
+      recovered: true,
+      operation: Promise.resolve(),
+      rematchVotes: new Set(),
+    });
+  }
+  logger.info(`Recovered ${activeRooms.size} active game room(s)`);
+  return activeRooms.size;
+}
+
+async function finalizeGameAtomic(room, result, winnerColor) {
+  return Game.runInTransaction(async client => {
+    const finished = await client.query(
+      `UPDATE games SET status='finished', result=$2, winner_color=$3, ended_at=CURRENT_TIMESTAMP
+       WHERE id=$1 AND status='in_progress' RETURNING id`,
+      [room.gameId, result, winnerColor]
+    );
+    if (finished.rowCount === 0) return { settled: false, eloChange: null };
+    if (finished.rowCount !== 1) throw new Error("Game finalization affected multiple rows");
+
+    const white = room.players.find(player => player.color === "w");
+    const black = room.players.find(player => player.color === "b");
+    if (!white?.userId || !black?.userId) return { settled: true, eloChange: null };
+
+    const ids = [white.userId, black.userId].sort((a, b) => a - b);
+    const users = await client.query("SELECT id, elo_rating FROM users WHERE id=ANY($1::int[]) ORDER BY id FOR UPDATE", [ids]);
+    if (users.rowCount !== 2) throw new Error("ELO participants missing");
+    const whiteUser = users.rows.find(user => user.id === white.userId);
+    const blackUser = users.rows.find(user => user.id === black.userId);
+    const whiteScore = winnerColor === "w" ? 1 : winnerColor === "b" ? 0 : 0.5;
+    const [whiteElo, blackElo] = computeNewRatings(whiteUser.elo_rating, blackUser.elo_rating, whiteScore);
+    const whiteUpdate = await client.query("UPDATE users SET elo_rating=$2 WHERE id=$1", [white.userId, whiteElo]);
+    const blackUpdate = await client.query("UPDATE users SET elo_rating=$2 WHERE id=$1", [black.userId, blackElo]);
+    if (whiteUpdate.rowCount !== 1 || blackUpdate.rowCount !== 1) throw new Error("ELO update failed");
+
+    const duration = Math.max(0, Math.floor((Date.now() - room.createdAt) / 1000));
+    for (const player of [white, black]) {
+      const score = await client.query(
+        `INSERT INTO scores (user_id,username,moves,duration_seconds,winner,game_mode,game_id)
+         VALUES ($1,$2,$3,$4,$5,'multiplayer',$6)
+         ON CONFLICT (game_id,user_id) WHERE game_id IS NOT NULL AND user_id IS NOT NULL DO NOTHING`,
+        [player.userId, player.name, room.moves.length, duration, player.color === winnerColor, room.gameId]
+      );
+      if (score.rowCount !== 1) throw new Error("Authoritative score insertion conflict");
+      const keys = ["first_game"];
+      if (player.color === winnerColor) {
+        const wins = await client.query("SELECT COUNT(*)::int AS count FROM scores WHERE user_id=$1 AND winner=true", [player.userId]);
+        if (wins.rows[0].count >= 1) keys.push("first_win");
+        if (wins.rows[0].count >= 5) keys.push("wins_5");
+        if (wins.rows[0].count >= 10) keys.push("wins_10");
+        if (wins.rows[0].count >= 25) keys.push("wins_25");
+        if (room.moves.length <= 15) keys.push("quick_win");
+      }
+      if (room.moves.length >= 60) keys.push("marathon");
+      await client.query(
+        `INSERT INTO user_achievements (user_id,achievement_key)
+         SELECT $1, unnest($2::varchar[]) ON CONFLICT (user_id,achievement_key) DO NOTHING`,
+        [player.userId, keys]
+      );
+    }
+    return {
+      settled: true,
+      eloChange: {
+        white: { username: white.name, old: whiteUser.elo_rating, new: whiteElo },
+        black: { username: black.name, old: blackUser.elo_rating, new: blackElo },
+      },
+    };
+  });
+}
+
+async function persistMoveAtomic(room, player, requestedMove) {
+  return Game.runInTransaction(async client => {
+    const locked = await client.query("SELECT board_fen, status FROM games WHERE id=$1 FOR UPDATE", [room.gameId]);
+    if (locked.rowCount !== 1 || locked.rows[0].status !== "in_progress") throw new Error("Game is no longer active");
+    const chess = new Chess(locked.rows[0].board_fen || undefined);
+    if (chess.turn() !== player.color) return null;
+    let canonical;
+    try {
+      canonical = chess.move({ from: requestedMove?.from, to: requestedMove?.to, promotion: requestedMove?.promotion });
+    } catch (_) { canonical = null; }
+    if (!canonical) return null;
+    const fen = chess.fen();
+    const updated = await client.query(
+      "UPDATE games SET board_fen=$2 WHERE id=$1 AND status='in_progress' RETURNING id", [room.gameId, fen]
+    );
+    if (updated.rowCount !== 1) throw new Error("Board update conflict");
+    const inserted = await client.query(
+      `INSERT INTO moves (game_id,move_number,player_color,from_square,to_square,piece,captured_piece,san,fen_after,promotion)
+       SELECT $1, COALESCE(MAX(move_number),0)+1, $2,$3,$4,$5,$6,$7,$8,$9 FROM moves WHERE game_id=$1 RETURNING *`,
+      [room.gameId, player.color, canonical.from, canonical.to, `${player.color}${canonical.piece.toUpperCase()}`,
+        canonical.captured ? `${player.color === "w" ? "b" : "w"}${canonical.captured.toUpperCase()}` : null,
+        canonical.san, fen, canonical.promotion || null]
+    );
+    if (inserted.rowCount !== 1) throw new Error("Move insert failed");
+    return { chess, move: canonical, record: inserted.rows[0] };
+  });
+}
+
+function endedPayload(room, result, winner, eloChange) {
+  return {
     result,
     winner,
     totalMoves: room.moves.length,
-    duration: Math.floor((Date.now() - room.createdAt) / 1000),
-    eloChange: finalization.eloChange,
-  });
-
-  scheduleRoomCleanup(room.id);
-  return finalization;
+    duration: Math.max(0, Math.floor((Date.now() - room.createdAt) / 1000)),
+    eloChange,
+  };
 }
 
-const initSocket = (io) => {
-  io.on("connection", (socket) => {
+function initSocket(io) {
+  io.use(socketAuthentication);
+  io.on("connection", socket => {
     logger.info(`Socket connected: ${socket.id}`);
+    socket.use(async (_packet, next) => {
+      try {
+        if (await activeSession(socket.data.user)) return next();
+      } catch (error) { logger.warn("Socket session check failed", { error: error.message }); }
+      next(new Error("Authentication required"));
+    });
 
-    // ── Create a new game room ────────────────────────
     socket.on("create_room", async ({ playerName } = {}) => {
-      const cleanName = cleanPlayerName(playerName);
-      if (!cleanName) {
-        return socket.emit("error", { message: "Invalid player name" });
-      }
-
-      const userId = socket.userId ?? null;
-      const roomId = generateRoomId();
-      const chess = new Chess();
-      const initialFen = chess.fen();
-
-      // Persist the game FIRST. room_created is only ever emitted after
-      // this succeeds — there is no window where a client believes a
-      // room exists that has no backing database row.
-      let game;
       try {
-        game = await Game.runInTransaction((client) =>
-          Game.createWithClient(client, {
-            roomId,
-            whiteUserId: userId,
-            whiteUsername: cleanName,
-            gameMode: "multiplayer",
-            initialFen,
-          })
-        );
+        const name = socket.data.user.username || String(playerName || "").slice(0, 20);
+        const roomId = generateRoomId();
+        const game = await Game.create({ roomId, whiteUserId: socket.data.user.id, whiteUsername: name });
+        const chess = new Chess(game.board_fen);
+        const room = {
+          id: roomId, gameId: game.id, chess, board: chess.fen(), turn: "w", status: "waiting",
+          players: [{ id: socket.id, name, color: "w", userId: socket.data.user.id }],
+          moves: [], createdAt: Date.now(), recovered: false, operation: Promise.resolve(), rematchVotes: new Set(),
+        };
+        activeRooms.set(roomId, room);
+        socket.join(roomId);
+        socket.emit("room_created", { roomId, color: "w" });
       } catch (err) {
-        logger.error(`Failed to persist game for room ${roomId}: ${err.message}`);
-        return socket.emit("error", { message: "Failed to persist game" });
+        logger.error("Create room failed", { error: err.stack });
+        socket.emit("error", { message: "Unable to create room" });
       }
-
-      const room = {
-        id: roomId,
-        gameId: game.id,
-        players: [{ id: socket.id, name: cleanName, color: "w", userId }],
-        chess,
-        turn: "w",
-        status: "waiting",
-        moves: [],
-        createdAt: Date.now(),
-        finalizing: false,
-        rematchVotes: null,
-      };
-      activeRooms.set(roomId, room);
-      socket.join(roomId);
-      socket.emit("room_created", { roomId, color: "w" });
-      logger.info(`Room created: ${roomId} by ${cleanName} (gameId=${game.id})`);
     });
 
-    // ── Join an existing room ────────────────────────
-    socket.on("join_room", async ({ roomId, playerName } = {}) => {
-      const room = activeRooms.get(roomId);
-      if (!room) {
-        return socket.emit("error", { message: "Room not found" });
-      }
-      if (room.players.length >= 2) {
-        return socket.emit("error", { message: "Room is full" });
-      }
-      if (room.status !== "waiting") {
-        return socket.emit("error", { message: "Game already started" });
-      }
-
-      const cleanName = cleanPlayerName(playerName);
-      if (!cleanName) {
-        return socket.emit("error", { message: "Invalid player name" });
-      }
-
-      const userId = socket.userId ?? null;
-
-      // Persist FIRST. The WHERE clause (status='in_progress' AND
-      // black_user_id IS NULL) is the real guard against two join_room
-      // calls racing each other — Postgres serializes concurrent
-      // UPDATEs on the same row, so at most one of them can match.
+    socket.on("join_room", async ({ roomId } = {}) => {
+      const room = activeRooms.get(String(roomId || "").toUpperCase());
+      if (!room) return socket.emit("error", { message: "Room not found" });
       try {
-        await Game.runInTransaction((client) =>
-          Game.joinBlackByIdWithClient(client, room.gameId, {
-            blackUserId: userId,
-            blackUsername: cleanName,
-          })
-        );
+        await roomTask(room, async () => {
+          const reconnecting = room.players.find(player => player.userId === socket.data.user.id && !player.id);
+          if (reconnecting) {
+            reconnecting.id = socket.id;
+          } else {
+            if (room.players.some(player => player.userId === socket.data.user.id)) throw new Error("Already joined");
+            if (room.players.length >= 2 || room.status !== "waiting") throw new Error("Room is full");
+            const game = await Game.claimBlack(room.gameId, {
+              blackUserId: socket.data.user.id,
+              blackUsername: socket.data.user.username,
+            });
+            if (!game) throw new Error("Room is full");
+            room.players.push({ id: socket.id, name: socket.data.user.username, color: "b", userId: socket.data.user.id });
+            room.status = "playing";
+          }
+          socket.join(room.id);
+          const bothConnected = room.players.length === 2 && room.players.every(player => player.id);
+          if (bothConnected) {
+            io.to(room.id).emit("game_start", {
+              roomId: room.id, players: publicPlayers(room), turn: room.turn, boardState: room.board, recovered: room.recovered,
+              moveHistory: room.moves.map(record => ({ from: record.from_square, to: record.to_square, promotion: record.promotion || undefined, san: record.san })),
+            });
+          } else {
+            socket.emit("room_rejoined", { roomId: room.id, color: reconnecting.color, boardState: room.board, turn: room.turn });
+          }
+        });
       } catch (err) {
-        logger.error(`Failed to persist black player for room ${roomId}: ${err.message}`);
-        return socket.emit("error", { message: "Failed to join game" });
+        socket.emit("error", { message: err.message === "Already joined" ? "Already joined" : "Room is full" });
       }
-
-      // Re-check room capacity — protects against a second join_room
-      // that raced in after the DB write above started but before this
-      // point (it would have failed the DB write, but must not also be
-      // allowed to mutate memory).
-      if (room.players.length >= 2 || room.status !== "waiting") {
-        return socket.emit("error", { message: "Room is full" });
-      }
-
-      room.players.push({ id: socket.id, name: cleanName, color: "b", userId });
-      room.status = "playing";
-      socket.join(roomId);
-
-      io.to(roomId).emit("game_start", { roomId, players: room.players, turn: room.turn });
-      logger.info(`${cleanName} joined room ${roomId}`);
     });
 
-    // ── Execute a move ───────────────────────────────────
-    socket.on("make_move", async ({ roomId, move } = {}) => {
+    socket.on("make_move", ({ roomId, move } = {}) => {
       const room = activeRooms.get(roomId);
-      if (!room || room.status !== "playing") {
-        return socket.emit("error", { message: "Game not in progress" });
-      }
-      if (room.finalizing) {
-        return socket.emit("error", { message: "Game is finalizing" });
-      }
+      if (!room) return socket.emit("error", { message: "Game not available" });
+      roomTask(room, async () => {
+        if (room.status !== "playing") return;
+        const player = room.players.find(candidate => candidate.id === socket.id);
+        if (!player || player.color !== room.turn) return socket.emit("error", { message: "Not your turn" });
 
-      const player = room.players.find((p) => p.id === socket.id);
-      if (!player) {
-        return socket.emit("error", { message: "Not authorized for make_move" });
-      }
-      if (player.color !== room.turn) {
-        return socket.emit("error", { message: "Not your turn" });
-      }
-      if (!move || typeof move.from !== "string" || typeof move.to !== "string") {
-        return socket.emit("error", { message: "Illegal move" });
-      }
-
-      // Capture full previous state BEFORE mutating the chess engine, so
-      // a persistence failure can restore it exactly.
-      const previousFen = room.chess.fen();
-      const previousTurn = room.turn;
-
-      let chessMove;
-      try {
-        chessMove = room.chess.move({
-          from: move.from,
-          to: move.to,
-          promotion: move.promotion,
-        });
-      } catch (_) {
-        chessMove = null;
-      }
-
-      if (!chessMove) {
-        // chess.js does not mutate state on a rejected move — nothing
-        // to roll back.
-        return socket.emit("error", { message: "Illegal move" });
-      }
-
-      // Everything below is derived from chess.js's own result, never
-      // from anything the client sent (piece/captured/san/turn/etc. on
-      // the incoming payload are never read).
-      const newFen = room.chess.fen();
-      const newTurn = room.chess.turn();
-      const moveNumber = room.moves.length + 1;
-
-      try {
-        await Game.runInTransaction(async (client) => {
-          await Game.updateBoardFENByIdWithClient(client, room.gameId, newFen);
-          await Move.recordWithClient(client, {
-            gameId: room.gameId,
-            moveNumber,
-            playerColor: chessMove.color,
-            from: chessMove.from,
-            to: chessMove.to,
-            piece: chessMove.piece,
-            capturedPiece: chessMove.captured ?? null,
-            san: chessMove.san,
-            fenAfter: newFen,
-          });
-        });
-      } catch (err) {
-        logger.error(`Failed to record move transaction for room ${roomId}: ${err.message}`);
-        // Roll back the in-memory engine to the exact pre-move FEN.
-        // room.turn/room.board/room.moves were never touched, so memory
-        // matches the (unchanged) database exactly.
-        room.chess.load(previousFen);
-        return socket.emit("error", { message: "Failed to record move" });
-      }
-
-      // Commit succeeded — advance authoritative memory state.
-      room.turn = newTurn;
-      room.board = newFen;
-      room.moves.push({
-        from: chessMove.from,
-        to: chessMove.to,
-        piece: chessMove.piece,
-        captured: chessMove.captured ?? null,
-        san: chessMove.san,
-        color: chessMove.color,
-        player: player.color,
-        time: Date.now(),
-      });
-
-      io.to(roomId).emit("move_made", {
-        move: { from: chessMove.from, to: chessMove.to, promotion: chessMove.promotion ?? null },
-        boardState: newFen,
-        turn: room.turn,
-        moveCount: room.moves.length,
-      });
-
-      // Terminal-state detection happens only after a committed move,
-      // strictly from the server's own chess.js instance.
-      if (room.chess.isCheckmate() || room.chess.isDraw()) {
-        const derivedResult = room.chess.isCheckmate() ? "checkmate" : "draw";
-        let derivedWinnerColor = null;
-        let derivedWinner = null;
-        if (derivedResult === "checkmate") {
-          // The side that just moved (previousTurn) delivered mate.
-          derivedWinnerColor = previousTurn;
-          const winnerPlayer = room.players.find((p) => p.color === derivedWinnerColor);
-          derivedWinner = winnerPlayer?.name ?? null;
-        }
+        let persisted;
         try {
-          await finalizeGame(io, room, derivedResult, derivedWinnerColor, derivedWinner);
+          persisted = await persistMoveAtomic(room, player, move);
         } catch (err) {
-          logger.error(`Auto finalization failed for room ${roomId}: ${err.message}`);
-          socket.emit("error", { message: "Failed to finalize game over" });
+          logger.error(`Move persistence failed for game ${room.gameId}`, { error: err.stack });
+          return socket.emit("error", { message: "Unable to record move" });
         }
-      }
-    });
-
-    // ── Authoritative game over (client just asks the server to check) ───────
-    socket.on("game_over", async ({ roomId } = {}) => {
-      const room = activeRooms.get(roomId);
-      if (!room) {
-        return socket.emit("error", { message: "Room not found" });
-      }
-
-      const caller = room.players.find((p) => p.id === socket.id);
-      if (!caller) {
-        return socket.emit("error", { message: "Not authorized for game_over" });
-      }
-      if (room.status === "finished") {
-        return socket.emit("error", { message: "Game already finished" });
-      }
-      if (room.finalizing) {
-        return socket.emit("error", { message: "Game is finalizing" });
-      }
-
-      // The result is derived ENTIRELY from the server's chess.js state.
-      // payload.result / payload.winner (if the client sent them) are
-      // never read.
-      const isCheckmate = room.chess.isCheckmate();
-      const isDraw = room.chess.isDraw();
-
-      if (!isCheckmate && !isDraw) {
-        return socket.emit("error", { message: "Game not over" });
-      }
-
-      let derivedResult;
-      let derivedWinnerColor = null;
-      let derivedWinner = null;
-      if (isCheckmate) {
-        derivedResult = "checkmate";
-        derivedWinnerColor = room.turn === "w" ? "b" : "w";
-        const winnerPlayer = room.players.find((p) => p.color === derivedWinnerColor);
-        derivedWinner = winnerPlayer?.name ?? null;
-      } else {
-        derivedResult = "draw";
-      }
-
-      try {
-        await finalizeGame(io, room, derivedResult, derivedWinnerColor, derivedWinner);
-      } catch (err) {
-        logger.error(`Failed to finalize game_over for room ${roomId}: ${err.message}`);
-        socket.emit("error", { message: "Failed to finalize game over" });
-      }
-    });
-
-    // ── Request rematch ───────────────────────────────
-    socket.on("request_rematch", ({ roomId } = {}) => {
-      const room = activeRooms.get(roomId);
-      if (!room) return socket.emit("error", { message: "Room not found" });
-
-      const caller = room.players.find((p) => p.id === socket.id);
-      if (!caller) return socket.emit("error", { message: "Not authorized for request_rematch" });
-      if (room.status !== "finished") return socket.emit("error", { message: "Game not finished" });
-
-      io.to(roomId).emit("rematch_requested");
-    });
-
-    // ── Accept rematch ────────────────────────────────
-    // `ack`, if provided by the client, is called with a deterministic
-    // { ok, waitingForOpponent } result so a caller never has to guess
-    // (via a timer) whether their vote was the deciding one.
-    socket.on("accept_rematch", async ({ roomId } = {}, ack) => {
-      const respond = typeof ack === "function" ? ack : () => {};
-
-      const room = activeRooms.get(roomId);
-      if (!room) {
-        socket.emit("error", { message: "Room not found" });
-        return respond({ ok: false, error: "Room not found" });
-      }
-
-      const caller = room.players.find((p) => p.id === socket.id);
-      if (!caller) {
-        socket.emit("error", { message: "Not authorized for accept_rematch" });
-        return respond({ ok: false, error: "Not authorized for accept_rematch" });
-      }
-      if (room.status !== "finished") {
-        socket.emit("error", { message: "Rematch not available until game is finished" });
-        return respond({ ok: false, error: "Rematch not available until game is finished" });
-      }
-
-      if (!room.rematchVotes) room.rematchVotes = new Set();
-      room.rematchVotes.add(socket.id);
-
-      if (room.players.length < 2 || room.rematchVotes.size < room.players.length) {
-        return respond({ ok: true, waitingForOpponent: true });
-      }
-
-      // Both participants have voted — colors swap for the rematch.
-      const nextWhite = room.players.find((p) => p.color === "b");
-      const nextBlack = room.players.find((p) => p.color === "w");
-      if (!nextWhite || !nextBlack) {
-        room.rematchVotes = null;
-        socket.emit("error", { message: "Both players must be present for a rematch" });
-        return respond({ ok: false, error: "Both players must be present for a rematch" });
-      }
-
-      const chess = new Chess();
-      const initialFen = chess.fen();
-
-      // games.room_id is UNIQUE, so a rematch is a brand-new game row
-      // (room_id = NULL), never a reuse of the finished game's roomId.
-      let newGame;
-      try {
-        newGame = await Game.runInTransaction(async (client) => {
-          const created = await Game.createWithClient(client, {
-            roomId: null,
-            whiteUserId: nextWhite.userId,
-            whiteUsername: nextWhite.name,
-            gameMode: "multiplayer",
-            initialFen,
-          });
-          await Game.joinBlackByIdWithClient(client, created.id, {
-            blackUserId: nextBlack.userId,
-            blackUsername: nextBlack.name,
-          });
-          return created;
+        if (!persisted) return socket.emit("error", { message: "Illegal move" });
+        room.chess = persisted.chess;
+        room.board = persisted.chess.fen();
+        room.turn = persisted.chess.turn();
+        room.moves.push(persisted.record);
+        io.to(room.id).emit("move_made", {
+          move: persisted.move,
+          boardState: room.board,
+          turn: room.turn,
+          moveCount: room.moves.length,
+          moveHistory: room.moves.map(record => ({
+            from: record.from_square, to: record.to_square, promotion: record.promotion || undefined, san: record.san,
+          })),
         });
-      } catch (err) {
-        logger.error(`Failed to persist rematch game for room ${roomId}: ${err.message}`);
-        room.rematchVotes = null;
-        io.to(roomId).emit("error", { message: "Rematch failed to create new game" });
-        return respond({ ok: false, error: "Rematch failed to create new game" });
-      }
-
-      // Commit succeeded — now, and only now, reset authoritative memory.
-      room.gameId = newGame.id;
-      room.chess = chess;
-      room.board = initialFen;
-      room.turn = "w";
-      room.status = "playing";
-      room.moves = [];
-      room.createdAt = Date.now();
-      room.finalizing = false;
-      room.rematchVotes = null;
-      room.players = room.players.map((p) => ({
-        ...p,
-        color: p.id === nextWhite.id ? "w" : "b",
-      }));
-
-      io.to(roomId).emit("game_start", { roomId, players: room.players, turn: "w" });
-      respond({ ok: true, waitingForOpponent: false });
+        if (room.chess.isGameOver()) {
+          const result = room.chess.isCheckmate() ? "checkmate" : "draw";
+          const winnerColor = result === "checkmate" ? (room.turn === "w" ? "b" : "w") : null;
+          const winner = room.players.find(candidate => candidate.color === winnerColor)?.name || null;
+          try {
+            const finalized = await finalizeGameAtomic(room, result, winnerColor);
+            if (finalized.settled) {
+              room.status = "finished";
+              io.to(room.id).emit("game_ended", endedPayload(room, result, winner, finalized.eloChange));
+            }
+          } catch (err) {
+            logger.error("Automatic game finalization failed", { error: err.stack });
+            socket.emit("error", { message: "Move recorded; unable to finalize game" });
+          }
+        }
+      }).catch(() => socket.emit("error", { message: "Unable to process move" }));
     });
 
-    // ── Resign ───────────────────────────────────────────────
-    socket.on("resign", async ({ roomId } = {}) => {
-      const room = activeRooms.get(roomId);
-      if (!room) return socket.emit("error", { message: "Room not found" });
-
-      const caller = room.players.find((p) => p.id === socket.id);
-      if (!caller) return socket.emit("error", { message: "Not authorized for resign" });
-      if (room.status === "finished") return socket.emit("error", { message: "Game already finished" });
-      if (room.finalizing) return socket.emit("error", { message: "Game is finalizing" });
-
-      const opponent = room.players.find((p) => p.id !== socket.id);
-      const winnerColor = opponent ? opponent.color : null;
-      const winner = opponent ? opponent.name : null;
-
-      try {
-        await finalizeGame(io, room, "resign", winnerColor, winner);
-      } catch (err) {
-        logger.error(`Failed to finalize resign for room ${roomId}: ${err.message}`);
-        socket.emit("error", { message: "Failed to finalize resign" });
-      }
-    });
-
-    // ── Chat inside room ───────────────────────────────────
-    socket.on("send_message", ({ roomId, text } = {}) => {
+    socket.on("game_over", ({ roomId } = {}) => {
       const room = activeRooms.get(roomId);
       if (!room) return;
-
-      const player = room.players.find((p) => p.id === socket.id);
-      if (!player) return;
-
-      const clean = String(text || "").slice(0, 200).trim();
-      if (!clean) return;
-
-      io.to(roomId).emit("chat_message", {
-        playerName: player.name,
-        color: player.color,
-        text: clean,
-        time: Date.now(),
+      roomTask(room, async () => {
+        if (!room.players.some(player => player.id === socket.id)) return socket.emit("error", { message: "Not authorized" });
+        if (!room.chess.isGameOver()) return socket.emit("error", { message: "Game not over" });
+        if (room.status === "finished") return;
+        const result = room.chess.isCheckmate() ? "checkmate" : "draw";
+        const winnerColor = result === "checkmate" ? (room.turn === "w" ? "b" : "w") : null;
+        const winner = room.players.find(candidate => candidate.color === winnerColor)?.name || null;
+        const finalized = await finalizeGameAtomic(room, result, winnerColor);
+        if (finalized.settled) {
+          room.status = "finished";
+          io.to(room.id).emit("game_ended", endedPayload(room, result, winner, finalized.eloChange));
+        }
+      }).catch(err => {
+        logger.error("Game-over finalization failed", { error: err.stack });
+        socket.emit("error", { message: "Unable to finalize game" });
       });
     });
 
-    // ── Disconnect handling ───────────────────────────────
-    socket.on("disconnect", async () => {
-      logger.info(`Socket disconnected: ${socket.id}`);
+    socket.on("resign", ({ roomId } = {}) => {
+      const room = activeRooms.get(roomId);
+      if (!room) return;
+      roomTask(room, async () => {
+        if (room.status !== "playing") return;
+        const caller = room.players.find(player => player.id === socket.id);
+        if (!caller) return socket.emit("error", { message: "Not authorized" });
+        const opponent = room.players.find(player => player.color !== caller.color);
+        const finalized = await finalizeGameAtomic(room, "resign", opponent?.color || null);
+        if (!finalized.settled) return;
+        room.status = "finished";
+        io.to(room.id).emit("game_ended", endedPayload(room, "resign", opponent?.name || null, finalized.eloChange));
+      }).catch(() => socket.emit("error", { message: "Unable to resign" }));
+    });
 
-      for (const [roomId, room] of activeRooms.entries()) {
-        const playerIdx = room.players.findIndex((p) => p.id === socket.id);
-        if (playerIdx === -1) continue;
+    socket.on("request_rematch", ({ roomId } = {}) => {
+      const room = activeRooms.get(roomId);
+      if (room?.players.some(player => player.id === socket.id) && room.status === "finished") {
+        socket.to(roomId).emit("rematch_requested");
+      }
+    });
 
-        if (room.status === "waiting") {
-          // No game has started yet (single player in the room) — safe
-          // to drop; nothing in the database needs reconciling.
-          room.players.splice(playerIdx, 1);
-          if (room.players.length === 0) {
-            activeRooms.delete(roomId);
-            logger.info(`Room ${roomId} deleted (empty, waiting)`);
-          }
-        } else if (room.status === "playing") {
-          if (room.finalizing) {
-            // A finalization (e.g. a checkmate that just landed) is
-            // already committing — do not race it with a second one.
-            break;
-          }
-          const remaining = room.players.find((p) => p.id !== socket.id);
-          const winnerColor = remaining ? remaining.color : null;
-          const winner = remaining ? remaining.name : null;
-
-          // Remove the disconnecting player BEFORE finalizing. This is
-          // what guarantees disconnect never changes ELO: finalizeGame
-          // only settles ELO when both seats are occupied, and one seat
-          // is now empty.
-          room.players.splice(playerIdx, 1);
-          socket.to(roomId).emit("opponent_disconnected");
-
-          try {
-            await finalizeGame(io, room, "disconnect", winnerColor, winner);
-          } catch (err) {
-            // If finalization fails, memory is deliberately left as-is
-            // (still "playing", not "finished") so it keeps matching the
-            // database's still-in_progress row, instead of marking the
-            // room finished in memory only.
-            logger.error(`Failed to finalize disconnect for room ${roomId}: ${err.message}`);
-          }
-        } else {
-          // status === 'finished' — the game is already settled; only
-          // bookkeeping remains.
-          room.players.splice(playerIdx, 1);
+    socket.on("accept_rematch", ({ roomId } = {}) => {
+      const room = activeRooms.get(roomId);
+      if (!room) return;
+      roomTask(room, async () => {
+        if (room.status !== "finished" || !room.players.some(player => player.id === socket.id)) {
+          return socket.emit("error", { message: "Not authorized" });
         }
+        room.rematchVotes.add(socket.id);
+        if (room.rematchVotes.size !== 2 || room.players.some(player => !player.id)) return;
+        const switched = room.players.map(player => ({ ...player, color: player.color === "w" ? "b" : "w" }));
+        const white = switched.find(player => player.color === "w");
+        const black = switched.find(player => player.color === "b");
+        const game = await Game.runInTransaction(async client => {
+          const released = await client.query("UPDATE games SET room_id=NULL WHERE id=$1 AND status='finished'", [room.gameId]);
+          if (released.rowCount !== 1) throw new Error("Rematch room release failed");
+          const created = await Game.create({ roomId: room.id, whiteUserId: white.userId, whiteUsername: white.name }, client);
+          await Game.joinBlackById(created.id, { blackUserId: black.userId, blackUsername: black.name }, client);
+          return created;
+        });
+        room.gameId = game.id;
+        room.players = switched;
+        room.chess = new Chess(game.board_fen);
+        room.board = room.chess.fen();
+        room.turn = "w";
+        room.moves = [];
+        room.createdAt = Date.now();
+        room.status = "playing";
+        room.rematchVotes.clear();
+        io.to(room.id).emit("game_start", { roomId: room.id, players: publicPlayers(room), turn: "w", boardState: room.board });
+      }).catch(err => { logger.error("Rematch failed", { error: err.stack }); socket.emit("error", { message: "Unable to start rematch" }); });
+    });
+
+    socket.on("send_message", ({ roomId, text } = {}) => {
+      const room = activeRooms.get(roomId);
+      const player = room?.players.find(candidate => candidate.id === socket.id);
+      const clean = String(text || "").slice(0, 200).trim();
+      if (player && clean) io.to(roomId).emit("chat_message", { playerName: player.name, color: player.color, text: clean, time: Date.now() });
+    });
+
+    socket.on("leave_room", ({ roomId } = {}, acknowledge = () => {}) => {
+      const room = activeRooms.get(roomId);
+      if (!room) return acknowledge({ left: true });
+      roomTask(room, async () => {
+        const player = room.players.find(candidate => candidate.id === socket.id);
+        if (!player) return acknowledge({ error: "Not authorized" });
+        if (room.status === "playing") {
+          const opponent = room.players.find(candidate => candidate.color !== player.color);
+          const finalized = await finalizeGameAtomic(room, "resign", opponent?.color || null);
+          if (finalized.settled) {
+            room.status = "finished";
+            io.to(room.id).emit("game_ended", endedPayload(room, "resign", opponent?.name || null, finalized.eloChange));
+          }
+        }
+        player.id = null;
+        room.rematchVotes.delete(socket.id);
+        socket.leave(room.id);
+        acknowledge({ left: true });
+      }).catch(error => {
+        logger.error("Leave room failed", { error: error.stack });
+        acknowledge({ error: "Unable to leave room" });
+      });
+    });
+
+    socket.on("disconnect", () => {
+      for (const room of activeRooms.values()) {
+        const player = room.players.find(candidate => candidate.id === socket.id);
+        if (!player) continue;
+        roomTask(room, async () => {
+          player.id = null;
+          room.rematchVotes.delete(socket.id);
+          if (room.status === "playing") socket.to(room.id).emit("opponent_disconnected");
+          if (room.status === "finished" && room.players.every(candidate => !candidate.id)) activeRooms.delete(room.id);
+        }).catch(error => logger.error("Disconnect state update failed", { error: error.stack }));
         break;
       }
     });
   });
-};
+}
 
-module.exports = { initSocket, activeRooms };
+function generateRoomId() {
+  let id;
+  do { id = require("crypto").randomBytes(5).toString("base64url").slice(0, 8).toUpperCase(); } while (activeRooms.has(id));
+  return id;
+}
+
+function touchedGameIds() {
+  return [...activeRooms.values()].filter(room => room.status !== "finished").map(room => room.gameId).filter(Boolean);
+}
+
+async function drainRoomOperations() {
+  await Promise.allSettled([...activeRooms.values()].map(room => room.operation));
+}
+
+module.exports = {
+  initSocket, activeRooms, rebuildActiveRooms, finalizeGameAtomic, persistMoveAtomic,
+  touchedGameIds, drainRoomOperations, socketAuthentication,
+};

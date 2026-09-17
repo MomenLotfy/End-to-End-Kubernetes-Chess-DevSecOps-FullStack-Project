@@ -40,7 +40,7 @@ router.post("/request", authMiddleware, [
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+    if (!errors.isEmpty()) return res.status(400).json({ error: "Invalid request" });
 
     const result = await Friendship.sendRequest(req.user.id, req.body.username);
     if (result.error) return res.status(400).json({ error: result.error });

@@ -6,13 +6,14 @@ const { query } = require("../config/db");
 const Score = {
 
   // حفظ نتيجة لعبة (gameId اختياري — بيربطها بسجل تفصيلي في جدول games لو موجود)
-  async save({ userId, username, moves, duration, winner, gameMode, gameId }) {
-    const result = await query(
+  async save({ userId, username, moves, duration, winner, gameMode, gameId }, client = null) {
+    const result = await (client || { query }).query(
       `INSERT INTO scores (user_id, username, moves, duration_seconds, winner, game_mode, game_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING *`,
       [userId, username, moves, duration, winner, gameMode || "local", gameId ?? null]
     );
+    if (result.rowCount !== 1) throw new Error(`save score affected ${result.rowCount} rows`);
     return result.rows[0];
   },
 

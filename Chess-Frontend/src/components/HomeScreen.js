@@ -101,10 +101,11 @@ export default function HomeScreen({ user, token, onLogout, onAuthSuccess, onPla
       </div>
 
       {/* quick links row */}
-      <div style={{ display: "flex", gap: "20px" }}>
+      <div style={{ display: "flex", gap: "20px", flexWrap: "wrap", justifyContent: "center" }}>
         <div style={linkChip} onClick={() => setShowLeaderboard(true)}><Icon name="chess-cup" size={46} />Leaderboard</div>
         <div style={linkChip} onClick={() => setShowTournaments(true)}><Icon name="knock-out-stage" size={46} />Tournaments</div>
         <div style={linkChip} onClick={() => user ? setShowFriends(true) : setShowAuth(true)}><Icon name="friends" size={46} />Friends</div>
+        <a href="/meet-the-creator" style={{ ...linkChip, textDecoration: "none" }}><Icon name="profile" size={46} />Meet the Creator</a>
       </div>
 
       {!user && <div style={{ fontSize: "var(--fs-caption)", color: C.txFaint, textAlign: "center", maxWidth: "260px" }}>Sign in to save your scores, climb the ELO leaderboard, and challenge friends.</div>}

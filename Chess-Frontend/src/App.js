@@ -8,6 +8,7 @@ import GameScreen from "./components/GameScreen";
 import OnlinePlay from "./components/OnlinePlay";
 import AIPlay from "./components/AIPlay";
 import AccountAction from "./components/AccountAction";
+import MeetTheCreator from "./components/MeetTheCreator";
 
 // ============================================================
 // App.js — Chess Frontend (Full-Stack Version)
@@ -20,7 +21,7 @@ import AccountAction from "./components/AccountAction";
 //   contexts/   SettingsContext (Dark/Light, Board Theme, Piece Style, Sound)
 //   components/ الشاشات والعناصر المرئية
 // ============================================================
-function AppInner() {
+function ChessApp() {
   const accountAction = ["/verify-email", "/reset-password"].includes(window.location.pathname);
   const [screen, setScreen] = useState("home"); // home | local | online
   const [timerMinutes, setTimerMinutes] = useState(null);
@@ -76,6 +77,13 @@ function AppInner() {
       )}
     </>
   );
+}
+
+function AppInner() {
+  const pathname = window.location.pathname.replace(/\/+$/, "") || "/";
+
+  if (pathname === "/meet-the-creator") return <MeetTheCreator />;
+  return <ChessApp />;
 }
 
 export default function App() {

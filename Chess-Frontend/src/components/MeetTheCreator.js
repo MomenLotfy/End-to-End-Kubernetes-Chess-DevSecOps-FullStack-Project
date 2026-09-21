@@ -132,7 +132,7 @@ export default function MeetTheCreator() {
               <span className="meet-creator__portrait-corner meet-creator__portrait-corner--top">ML / 01</span>
               <span className="meet-creator__portrait-corner meet-creator__portrait-corner--bottom">BUILD WITH INTENT</span>
               <div className="meet-creator__portrait-grid" aria-hidden="true">
-                <img src="/unnamed.png" alt="Creator portrait" className="meet-creator__portrait-image" />
+                <img src="/moamen-lotfy.png" alt="Creator portrait" className="meet-creator__portrait-image" />
               </div>
               <div className="meet-creator__avatar">
                 <span className="meet-creator__avatar-initials">ML</span>

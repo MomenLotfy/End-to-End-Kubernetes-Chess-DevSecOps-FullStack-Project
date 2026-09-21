@@ -134,11 +134,6 @@ export default function MeetTheCreator() {
               <div className="meet-creator__portrait-grid" aria-hidden="true">
                 <img src="/moamen-lotfy.png" alt="Creator portrait" className="meet-creator__portrait-image" />
               </div>
-              <div className="meet-creator__avatar">
-                <span className="meet-creator__avatar-initials">ML</span>
-                <span className="meet-creator__avatar-line" />
-                <span className="meet-creator__avatar-caption">Momen Lotfy</span>
-              </div>
               <div className="meet-creator__portrait-orbit meet-creator__portrait-orbit--one" aria-hidden="true" />
               <div className="meet-creator__portrait-orbit meet-creator__portrait-orbit--two" aria-hidden="true" />
             </div>

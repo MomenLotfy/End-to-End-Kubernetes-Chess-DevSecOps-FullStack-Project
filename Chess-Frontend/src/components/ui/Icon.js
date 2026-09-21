@@ -1,5 +1,6 @@
 // src/components/ui/Icon.js
 import React from "react";
+import { useSettings } from "../../contexts/SettingsContext";
 import backMain from "../../svg/back-icon-main.svg";
 import backWhite from "../../svg/back-icon-white.svg";
 import chatMain from "../../svg/chat-icon-main.svg";
@@ -103,10 +104,9 @@ const icons = {
 
 export default function Icon({ name, size = 24, title, className }) {
   // Detect dark mode via prefers-color-scheme or data-theme attribute
-  const isDark = typeof window !== "undefined" && (
-    (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ||
-    document.documentElement.getAttribute('data-theme') === 'dark'
-  );
+  // Determine current theme from application settings (useSettings) for reliable updates.
+  const { mode } = useSettings(); // "dark" or "light"
+  const isDark = mode === "dark";
 
   const entry = icons[name];
   if (!entry) return null;

@@ -37,7 +37,7 @@ export default function AIPlay({ onExit }) {
   const isAiTurn = started && game.turn === aiColor && !game.promo && !game.status?.match(/checkmate|stalemate|timeout/);
 
   useEffect(() => {
-    if (!isAiTurn && aiMovingRef.current) return;
+    if (!isAiTurn) return; // Only request AI move when it's AI's turn
     aiMovingRef.current = true;
     const fen = boardToFEN(game.board, game.turn, game.cast, game.ep, game.hist);
     requestMove(fen, { skillLevel: difficulty.skillLevel, movetimeMs: difficulty.movetimeMs }).then(mv => {

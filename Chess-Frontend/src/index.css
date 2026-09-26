@@ -44,6 +44,14 @@
   --dur-fast: 140ms;
   --dur-base: 220ms;
   --dur-slow: 380ms;
+
+  /* fluid chessboard square: 60px on desktop, shrinks to fit phones.
+     Total board ≈ 8×sq + labels + frame; 9.4vw keeps a 320px phone
+     (≈287px board + 28px page padding) overflow-free. ReplayModal
+     overrides --sq locally because it adds modal chrome. */
+  --sq: min(9.4vw, 60px);
+  --sq-label: min(16px, calc(var(--sq) * 0.36));
+  --sq-coord-fs: min(0.6rem, 2.9vw);
 }
 
 html, body { height: 100%; }
@@ -53,6 +61,13 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   transition: background var(--dur-slow) var(--ease);
+  overflow-x: clip;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Kill double-tap-to-zoom delay on interactive elements (mobile). */
+.cm-btn, .cm-chip, .cm-square, button {
+  touch-action: manipulation;
 }
 
 #root { min-height: 100vh; }
@@ -170,5 +185,30 @@ button, input, textarea {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
+  }
+}
+
+/* ============================================================
+   Responsive — phones & small tablets
+   ============================================================ */
+
+/* iOS Safari auto-zooms on inputs smaller than 16px; keep the
+   designed sizes on desktop, force 16px only on touch devices.
+   !important is required to beat inline fontSize styles. */
+@media (pointer: coarse) {
+  input, textarea, select {
+    font-size: 16px !important;
+  }
+}
+
+@media (max-width: 560px) {
+  :root {
+    --fs-display: 2rem;
+    --fs-h1: 1.35rem;
+  }
+  /* Home top bar: logo icon stays, wordmark hides so it never
+     collides with the action icons on narrow phones. */
+  .cm-brand-text {
+    display: none;
   }
 }

@@ -1,0 +1,76 @@
+# Obs traffic matrix (ingress default-deny + explicit allows; NO egress policy
+# — same Wave 5 rationale: VPC CNI cannot express AWS-API destinations):
+#   alloy      -> prometheus :9090  (remote-write; same-ns podSelector)
+#   prometheus -> alloy :12345      (scrape; same-ns podSelector)
+#   alloy      -> loki :3100        (log push; same-ns podSelector)
+#   grafana    -> prometheus :9090  (query; same-ns podSelector)
+#   grafana    -> loki :3100        (query; same-ns podSelector)
+#   alloy      -> kube-state-metrics :8080 (scrape; same-ns podSelector)
+#   prometheus -> alertmanager :9093 (notify; same-ns podSelector)
+#   nodes      -> all obs pods       (kubelet probes + kubectl port-forward
+#                                     from app-subnet CIDRs — debugging needs
+#                                     this; values mirror the app chart)
+#   kubelet    -> alloy :10250? NO — Alloy scrapes kubelets (EGRESS, open).
+#   obs pods   -> DNS :53            (egress open, unaffected)
+# NOT covered here: Alloy -> backend :5000 (lives in the APP chart netpol —
+# ingress rules attach to the destination namespace).
+{{- if .Values.networkPolicies.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "obs.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-obs-internal
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "obs.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    # Same-namespace pod-to-pod (explicit per-port; Alloy gossip included).
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 9090
+        - protocol: TCP
+          port: 9093
+        - protocol: TCP
+          port: 3100
+        - protocol: TCP
+          port: 3000
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
+          port: 12345
+    # Nodes: kubelet probes + kubectl port-forward (debugging path).
+    - from:
+        {{- range $cidr := required "networkPolicies.nodeCidrs is required (app-subnet CIDRs for kubelet + port-forward)" .Values.networkPolicies.nodeCidrs }}
+        - ipBlock:
+            cidr: {{ $cidr }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 9090
+        - protocol: TCP
+          port: 9093
+        - protocol: TCP
+          port: 3100
+        - protocol: TCP
+          port: 3000
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
+          port: 12345
+{{- end }}

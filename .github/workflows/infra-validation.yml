@@ -1,0 +1,284 @@
+# Wave 2 — legacy infrastructure validation (REPORT-ONLY, see justification below).
+# Covers EKS-TF/, Jenkins-Server-TF/, Manifest-file/ — all non-authoritative legacy slated
+# for replacement in Waves 4-5 (risk register R-1/R-4, ADR-006/007/010).
+#
+# JUSTIFICATION FOR continue-on-error: blocking PRs on known-broken legacy that no wave
+# consumes would add red noise with zero signal. These jobs exist to (a) prevent NEW
+# breakage from going unnoticed via summaries + artifacts, and (b) keep the validation
+# mechanics warm so Waves 4-5 flip them to blocking on the NEW terraform/ + helm-chess/
+# trees. The flip condition is documented per job. This is the ONLY workflow where
+# non-blocking security signal is accepted, and it is explicit, not silent.
+#
+# All third-party actions pinned to full commit SHAs (release tag in comment).
+
+name: infra-validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "EKS-TF/**"
+      - "Jenkins-Server-TF/**"
+      - "Manifest-file/**"
+      - "monitoring/**"
+      - "terraform/**"
+      - "deploy/**"
+      - ".github/workflows/infra-validation.yml"
+  push:
+    branches: [main]
+    paths:
+      - "EKS-TF/**"
+      - "Jenkins-Server-TF/**"
+      - "Manifest-file/**"
+      - "monitoring/**"
+      - "terraform/**"
+      - "deploy/**"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: infra-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TERRAFORM_VERSION: "~> 1.5"
+  # Exact version for the Wave 4 foundation (required_version >= 1.11 for S3
+  # native locking). Verified latest stable tag via GitHub API, 2026-09-22.
+  TERRAFORM_FOUNDATION_VERSION: "1.16.3"
+  KUBECONFORM_VERSION: v0.8.0
+
+jobs:
+  terraform-validate:
+    name: terraform-validate (report-only)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        dir: [EKS-TF, Jenkins-Server-TF]
+    # Report-only until Wave 4 introduces terraform/ (flip: remove continue-on-error
+    # and point matrix at terraform/environments/*).
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+      - name: Format check
+        working-directory: ${{ matrix.dir }}
+        run: terraform fmt -check -recursive -diff
+      - name: Init (no backend) + validate
+        working-directory: ${{ matrix.dir }}
+        run: terraform init -backend=false -input=false && terraform validate
+      - name: Summary
+        if: always()
+        run: 'echo "terraform ${{ matrix.dir }}: ${{ job.status }}" >> "$GITHUB_STEP_SUMMARY"'
+
+  # Wave 4 — BLOCKING. Every root under terraform/ must be fmt-clean and pass
+  # init (no backend; providers still resolve schemas) + validate. No AWS
+  # credentials needed: validate performs no reads. No continue-on-error.
+  terraform-foundation:
+    name: terraform-foundation (blocking)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        dir:
+          - terraform/bootstrap
+          - terraform/environments/staging
+          - terraform/environments/production
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TERRAFORM_FOUNDATION_VERSION }}
+          terraform_wrapper: false
+      - name: Format check
+        working-directory: ${{ matrix.dir }}
+        run: terraform fmt -check -recursive -diff
+      - name: Init (no backend) + validate
+        working-directory: ${{ matrix.dir }}
+        run: terraform init -backend=false -input=false && terraform validate
+      - name: Summary
+        if: always()
+        run: 'echo "terraform-foundation ${{ matrix.dir }}: ${{ job.status }}" >> "$GITHUB_STEP_SUMMARY"'
+
+  # Wave 4 — BLOCKING. Trivy misconfiguration scan over the whole foundation
+  # tree (all modules + all environments). HIGH/CRITICAL fails the PR; known
+  # deviations would need explicit --skip-checks with baseline-doc rationale
+  # (none needed at Wave 4 design time).
+  trivy-config-foundation:
+    name: trivy-config-foundation (blocking)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Trivy config scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: config
+          scan-ref: terraform
+          severity: HIGH,CRITICAL
+          format: sarif
+          output: trivy-config-terraform.sarif
+          exit-code: "1"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: trivy-config-terraform
+          path: trivy-config-terraform.sarif
+          retention-days: 7
+
+  # Wave 5 — BLOCKING. Helm lint + render with documented FAKE wiring
+  # (RFC 2606 .invalid host, zeroed account, a/b/c digests — never real
+  # identity) + kubeconform schema check (CRDs skipped: ESO kinds have no
+  # public schemas; they are YAML-parsed by the static checks instead) +
+  # the Wave 5 static battery (bundle checks skipped in CI: the gitops repo
+  # is separate and unreadable from here by design). No continue-on-error.
+  helm-validate:
+    name: helm-validate (blocking)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      HELM_VERSION: v4.3.0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: ${{ env.HELM_VERSION }}
+      - name: Helm lint
+        run: |
+          helm lint deploy/helm/chess
+          helm lint deploy/helm/chess-observability
+      - name: Install pinned kubeconform
+        run: |
+          curl -sSL -o /tmp/kubeconform.tar.gz \
+            "https://github.com/yannh/kubeconform/releases/download/${{ env.KUBECONFORM_VERSION }}/kubeconform-linux-amd64.tar.gz"
+          curl -sSL -o /tmp/checksums.txt \
+            "https://github.com/yannh/kubeconform/releases/download/${{ env.KUBECONFORM_VERSION }}/checksums.txt"
+          (cd /tmp && sha256sum --check checksums.txt --ignore-missing) || exit 1
+          tar -xzf /tmp/kubeconform.tar.gz -C /tmp kubeconform
+          sudo mv /tmp/kubeconform /usr/local/bin/ && kubeconform -v
+      - name: Render (fake wiring) + kubeconform
+        run: |
+          set -o pipefail
+          helm template chess-staging deploy/helm/chess \
+            -f deploy/helm/chess/values-staging.yaml \
+            --set global.registry=000000000000.dkr.ecr.us-east-1.amazonaws.com \
+            --set backend.image.digest=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+            --set frontend.image.digest=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+            --set migration.image.digest=sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc \
+            --set database.host=chess-staging.invalid \
+            --set origins.frontendUrl=https://staging.chess.invalid \
+            --set ingress.host=staging.chess.invalid \
+            --set ingress.certificateArn=arn:aws:acm:us-east-1:000000000000:certificate/00000000-0000-0000-0000-000000000000 \
+            --set networkPolicies.vpcCidr=10.20.0.0/16 \
+            --set networkPolicies.nodeCidrs={10.20.48.0/20,10.20.64.0/20} \
+            --set eso.rdsMasterSecretArn=arn:aws:secretsmanager:us-east-1:000000000000:secret:rds!db-000000 \
+            --set eso.redisSecretArn=arn:aws:secretsmanager:us-east-1:000000000000:secret:chess/staging/redis-000000 \
+            --namespace chess-staging \
+            | tee /tmp/chess-render.yaml | kubeconform -summary -output json | tee kubeconform-helm.json
+          helm template chess-observability deploy/helm/chess-observability \
+            -f deploy/helm/chess-observability/values-staging.yaml \
+            --set networkPolicies.nodeCidrs={10.20.48.0/20,10.20.64.0/20} \
+            --namespace chess-observability \
+            | tee /tmp/chess-obs-render.yaml | kubeconform -summary -output json | tee kubeconform-helm-obs.json
+          echo "## helm render summary" >> "$GITHUB_STEP_SUMMARY"
+          python3 -c "
+          import json
+          d = json.load(open('kubeconform-helm.json'))
+          s = d.get('summary', {})
+          open('$GITHUB_STEP_SUMMARY', 'a').write(f\"valid={s.get('valid')} invalid={s.get('invalid')} errors={s.get('errors')} skipped={s.get('skipped')}\n\")
+          "
+      - name: Wave 5 static checks (chart + release side)
+        run: python3 scripts/wave5-static-checks.py --skip-bundle
+      - name: Wave 6 static checks (observability side)
+        run: python3 scripts/wave6-static-checks.py --skip-bundle
+      - name: Wave 7 static checks (scale-out gate)
+        run: python3 scripts/wave7-static-checks.py
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: helm-validate-results
+          path: |
+            kubeconform-helm.json
+            kubeconform-helm-obs.json
+          retention-days: 7
+
+  trivy-config:
+    name: trivy-config (report-only)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        dir: [EKS-TF, Jenkins-Server-TF]
+    # Report-only: legacy TF has known findings (e.g. 0.0.0.0/0 SGs, R-4). Replaces
+    # deprecated tfsec + overlapping checkov with one scanner. Wave 4 added the
+    # separate blocking trivy-config-foundation job for terraform/.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Trivy config scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: config
+          scan-ref: ${{ matrix.dir }}
+          severity: HIGH,CRITICAL
+          format: sarif
+          output: trivy-config-${{ matrix.dir }}.sarif
+          exit-code: "0"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: trivy-config-${{ matrix.dir }}
+          path: trivy-config-${{ matrix.dir }}.sarif
+          retention-days: 7
+
+  kubeconform:
+    name: kubeconform (report-only)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # Report-only: legacy manifests are known-stale (R-1: replicas:2 backend, HTTP
+    # origins). Flip to blocking on helm-chess/ template output in Wave 5.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install pinned kubeconform
+        run: |
+          curl -sSL -o /tmp/kubeconform.tar.gz \
+            "https://github.com/yannh/kubeconform/releases/download/${{ env.KUBECONFORM_VERSION }}/kubeconform-linux-amd64.tar.gz"
+          curl -sSL -o /tmp/checksums.txt \
+            "https://github.com/yannh/kubeconform/releases/download/${{ env.KUBECONFORM_VERSION }}/checksums.txt"
+          (cd /tmp && sha256sum --check checksums.txt --ignore-missing) || exit 1
+          tar -xzf /tmp/kubeconform.tar.gz -C /tmp kubeconform
+          sudo mv /tmp/kubeconform /usr/local/bin/ && kubeconform -v
+      - name: Validate manifests
+        # pipefail: invalid manifests must fail the step (visible orange via
+        # continue-on-error) instead of being masked by tee's exit status.
+        run: |
+          set -o pipefail
+          kubeconform -strict -summary -output json Manifest-file/*.yml \
+            | tee kubeconform-results.json
+          echo "## kubeconform summary" >> "$GITHUB_STEP_SUMMARY"
+          python3 -c "
+          import json
+          d = json.load(open('kubeconform-results.json'))
+          s = d.get('summary', {})
+          open('$GITHUB_STEP_SUMMARY', 'a').write(f\"valid={s.get('valid')} invalid={s.get('invalid')} errors={s.get('errors')}\n\")
+          "
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: kubeconform-results
+          path: kubeconform-results.json
+          retention-days: 7

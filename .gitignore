@@ -9,6 +9,8 @@
 *.tfstate.lock.info
 .terraform.lock.hcl
 terraform.tfvars          # قد يحتوي على بيانات حساسة — استخدم variables.tfvars فقط
+# Wave 4: filled backend configs (examples stay tracked as *.hcl.example).
+terraform/**/backend.local.hcl
 *.tfplan
 override.tf
 override.tf.json
@@ -32,19 +34,39 @@ build/
 dist/
 .cache/
 
+# --- Test / coverage output (generated; never commit new files here) ---
+# NOTE: Chess-Backend/coverage/ has tracked legacy files; the pattern below stops
+# NEW files from being added. Untracking the legacy files is a Wave 1 cleanup item.
+coverage/
+*.lcov
+
 # --- Environment & Secrets ---
+# Wave 0: `.env.*` covers ALL dotenv variants (.env.test, .env.staging, .env.production, ...).
+# Only the documented templates below may be committed.
 .env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+.env.*
+!.env.example
+!Chess-Backend/.env.example
 *.pem
 *.key
 *.cert
 *.p12
 *.pfx
+*.passphrase
 *secret*
 *credentials*
+# Negations for non-secret paths that legitimately match the broad patterns above.
+# (Parent dir must be re-included before its files. Note: everything under
+# docs/security/ is committable by design; its guard is gitleaks + review, not gitignore.)
+!docs/security/
+!docs/security/**
+# Wave 7: ESO manifests are secret DELIVERY wiring (remoteRefs only, no
+# values — asserted by the static checkers) and MUST be tracked. Without
+# these negations the broad *secret* pattern silently drops them from git.
+!deploy/helm/chess/templates/externalsecrets.yaml
+!deploy/helm/chess/templates/secretstore.yaml
+!deploy/helm/chess-observability/templates/externalsecrets.yaml
+!deploy/helm/chess-observability/templates/secretstore.yaml
 
 # --- Docker ---
 # .dockerignore files are intentionally tracked for reproducible, minimal contexts.
@@ -90,3 +112,6 @@ letsencrypt/
 playwright-report/
 test-results/
 tests/certs/
+# Wave 6: never commit bytecode
+__pycache__/
+*.pyc

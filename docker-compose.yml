@@ -1,7 +1,20 @@
+# Production single-server stack (Wave 1 hardened).
+# Topology: Internet -> Nginx (chess-frontend :80/:443) -> backend x1 -> postgres.
+# Backend stays at ONE replica (ADR-002): Socket.io rooms, rate limits and uploads
+# are process-local until the Wave 7 Scale-Out Gate. Do NOT add replicas/Redis here.
+# Resource values are generous anti-DoS guardrails, not tuned packing; retune from
+# `docker stats` evidence. See docs/security/wave1-baseline.md.
+name: chess
+
 services:
   chess-postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    mem_limit: 1g
+    mem_reservation: 512m
+    cpus: 1.0
+    pids_limit: 200
+    stop_grace_period: 30s
     environment:
       POSTGRES_DB: chess_db
       POSTGRES_USER: chess_user
@@ -25,6 +38,10 @@ services:
     build:
       context: ./Database/migrations
     restart: "no"
+    init: true
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 50
     environment: &database_environment
       DB_HOST: chess-postgres
       DB_PORT: "5432"
@@ -45,6 +62,11 @@ services:
     build:
       context: ./Chess-Backend
     restart: unless-stopped
+    init: true # PID 1 signal forwarding + zombie reaping for node
+    mem_limit: 768m # headroom for Sharp (25MP decode cap) + 10-conn pg pool
+    mem_reservation: 384m
+    cpus: 1.0
+    pids_limit: 100
     environment:
       <<: *database_environment
       NODE_ENV: production
@@ -86,6 +108,10 @@ services:
     build:
       context: .
       dockerfile: tests/Dockerfile.integration
+    init: true
+    mem_limit: 512m
+    cpus: 0.5
+    pids_limit: 100
     environment:
       <<: *database_environment
       JWT_SECRET: integration-secret-that-is-longer-than-thirty-two-characters
@@ -103,6 +129,10 @@ services:
     build:
       context: ./Chess-Frontend
     restart: unless-stopped
+    mem_limit: 256m
+    mem_reservation: 128m
+    cpus: 0.5
+    pids_limit: 100
     depends_on:
       chess-backend: { condition: service_healthy }
     ports:

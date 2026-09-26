@@ -1,0 +1,79 @@
+# Controlled migration: ONE Job per release, BEFORE the workloads sync.
+# ArgoCD PreSync hook + delete-on-success: every sync gets a fresh Job, so a
+# new release always migrates exactly once; failed hooks are KEPT (failure
+# stays visible, sync blocks, next sync retries). The runner itself takes a
+# Postgres advisory lock + verifies checksums, so even a double-trigger could
+# not apply migrations twice. The backend Deployment never runs migrations.
+# Credentials: MASTER identity (DDL + GRANT ownership requires it), from the
+# chess-db-master ESO secret. Same SSL model as the backend (RDS force_ssl).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: chess-migration
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "chess.componentLabels" (dict "ctx" . "component" "migration") | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  parallelism: 1
+  completions: 1
+  backoffLimit: {{ .Values.migration.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migration.activeDeadlineSeconds }}
+  ttlSecondsAfterFinished: {{ .Values.migration.ttlSecondsAfterFinished }}
+  template:
+    metadata:
+      labels:
+        {{- include "chess.selectorLabels" (dict "ctx" . "component" "migration") | nindent 8 }}
+        {{- include "chess.labels" . | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: chess-migration
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: migration
+          image: {{ include "chess.image" (dict "registry" .Values.global.registry "repository" .Values.migration.image.repository "digest" .Values.migration.image.digest "context" "migration") }}
+          imagePullPolicy: IfNotPresent
+          # Default image CMD (node run.js); stated explicitly so the contract
+          # is visible in GitOps rather than hidden in the Dockerfile.
+          command: ["node", "run.js"]
+          envFrom:
+            - configMapRef:
+                name: chess-backend-config
+          env:
+            # MASTER identity: owns the schema, runs DDL + 008 GRANTs.
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef: { name: chess-db-master, key: username }
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: chess-db-master, key: password }
+            - name: DB_SSL_CA
+              valueFrom:
+                secretKeyRef: { name: chess-app, key: db-ssl-ca }
+          resources:
+            {{- toYaml .Values.migration.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi

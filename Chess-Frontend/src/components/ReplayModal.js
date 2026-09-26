@@ -58,14 +58,17 @@ export default function ReplayModal({ gameId, onClose }) {
   const iconBtn = { background: C.pnl, color: C.tx, border: `1px solid ${C.pnlBd}`, borderRadius: "var(--r-md)", padding: "7px 13px", cursor: "pointer", fontSize: "0.9rem" };
 
   return (
-    <div className="cm-fade-in" onClick={e => e.target === e.currentTarget && onClose()} style={{ ...overlay, padding: "12px" }}>
-      <div className="cm-modal-pop" style={{ background: `linear-gradient(155deg, ${C.surfaceHover}, ${C.modalBg})`, border: `1px solid ${C.border}`, borderRadius: "var(--r-xl)", padding: "20px", display: "flex", flexDirection: "column", alignItems: "center", gap: "14px", maxHeight: "92vh", overflowY: "auto", boxShadow: "var(--sh-lg)" }}>
+    <div className="cm-fade-in" onClick={e => e.target === e.currentTarget && onClose()} style={{ ...overlay, padding: "min(12px, 3vw)" }}>
+      <div className="cm-modal-pop" style={{ background: `linear-gradient(155deg, ${C.surfaceHover}, ${C.modalBg})`, border: `1px solid ${C.border}`, borderRadius: "var(--r-xl)", padding: "min(20px, 4vw)", maxWidth: "94vw", display: "flex", flexDirection: "column", alignItems: "center", gap: "14px", maxHeight: "92vh", overflowY: "auto", boxShadow: "var(--sh-lg)" }}>
         <div style={{ display: "flex", justifyContent: "space-between", width: "100%", alignItems: "center" }}>
           <span style={{ color: C.gold, fontWeight: 700, fontFamily: "var(--font-display)", fontSize: "var(--fs-h2)" }}>▶ Game Replay</span>
           <button onClick={onClose} style={{ background: "transparent", border: "none", color: C.txMut, fontSize: "1.2rem", cursor: "pointer" }}><Icon name="back" size={24} /></button>
         </div>
 
-        <ChessBoard board={snapshots[step]} sel={null} mvSet={new Set()} lastMv={null} ckKing={null} onSquareClick={() => {}} />
+        {/* Modal adds its own chrome, so shrink the fluid square locally on phones. */}
+        <div style={{ "--sq": "min(7.8vw, 60px)" }}>
+          <ChessBoard board={snapshots[step]} sel={null} mvSet={new Set()} lastMv={null} ckKing={null} onSquareClick={() => {}} />
+        </div>
 
         <div className="cm-btn" style={{ display: "flex", gap: "8px", alignItems: "center" }}>
           <div className="cm-btn" style={iconBtn} onClick={() => setStep(0)}>⏮</div>

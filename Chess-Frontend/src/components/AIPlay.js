@@ -69,7 +69,7 @@ export default function AIPlay({ onExit }) {
 
   if (!started) {
     return (
-      <div className="cm-screen" style={{ minHeight: "100vh", background: C.bgGradient || C.bg, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "24px", fontFamily: "var(--font-ui)" }}>
+      <div className="cm-screen" style={{ minHeight: "100vh", background: C.bgGradient || C.bg, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "24px", fontFamily: "var(--font-ui)", padding: "24px 16px" }}>
         <div style={{ textAlign: "center" }}>
           <div style={{ fontFamily: "var(--font-display)", fontSize: "var(--fs-display)", fontWeight: 800, color: C.tx, letterSpacing: "0.02em" }}>Vs Computer</div>
           <div style={{ fontSize: "var(--fs-caption)", color: C.txMut, letterSpacing: "0.2em", marginTop: "4px" }}>Powered by Stockfish</div>
@@ -83,10 +83,30 @@ export default function AIPlay({ onExit }) {
             </div>
           </div>
 
-          <div style={{ display: "flex", gap: "10px", width: "100%", flexWrap: "wrap" }}>
-            <Button variant="secondary" style={{ flex: 1 }} onClick={() => startGame("w")}>White</Button>
-            <Button variant="primary" style={{ flex: 1 }} onClick={() => startGame("random")}><Icon name="dice" size={24} /> Random</Button>
-            <Button variant="secondary" style={{ flex: 1 }} onClick={() => startGame("b")}>Black</Button>
+          <div style={{ width: "100%" }}>
+            <div style={{ fontSize: "var(--fs-caption)", color: C.txMut, letterSpacing: "0.14em", textTransform: "uppercase", marginBottom: "10px" }}>Play As</div>
+            <div style={{ display: "flex", gap: "10px", width: "100%", flexWrap: "wrap" }}>
+              <Button variant="secondary" style={{ flex: 1 }} onClick={() => startGame("w")}>♔ White</Button>
+              <Button variant="secondary" style={{ flex: 1 }} onClick={() => startGame("b")}>♚ Black</Button>
+            </div>
+            <div
+              onClick={() => startGame("random")}
+              className="cm-btn"
+              role="button" tabIndex={0}
+              onKeyDown={e => (e.key === "Enter" || e.key === " ") && startGame("random")}
+              title="Random color"
+              style={{
+                width: "76px", height: "76px", margin: "14px auto 0", borderRadius: "var(--r-lg)",
+                background: `linear-gradient(180deg, ${C.accentHv}, ${C.accent})`,
+                color: "#fff8ec", border: "1px solid rgba(0,0,0,0.15)",
+                boxShadow: "var(--sh-sm), inset 0 1px 0 rgba(255,255,255,0.15)",
+                display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+                gap: "5px", cursor: "pointer", userSelect: "none",
+              }}
+            >
+              <Icon name="dice" size={30} />
+              <span style={{ fontSize: "var(--fs-caption)", fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase" }}>Random</span>
+            </div>
           </div>
 
           {engineError && <div style={{ color: C.danger, fontSize: "var(--fs-caption)", textAlign: "center" }}>{engineError} — the local chess engine could not start.</div>}
@@ -98,7 +118,7 @@ export default function AIPlay({ onExit }) {
 
   return (
     <div className="cm-screen" style={{ minHeight: "100vh", background: C.bgGradient || C.bg, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", fontFamily: "var(--font-ui)", padding: "14px", gap: "10px" }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", maxWidth: "510px" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "6px 12px", width: "100%", maxWidth: "510px" }}>
         <div onClick={onExit} className="cm-btn" style={{ color: C.txMut, cursor: "pointer", fontSize: "var(--fs-caption)", fontWeight: 600 }}><Icon name="back" size={24} /> MENU</div>
         <div style={{ fontFamily: "var(--font-display)", fontSize: "1.05rem", fontWeight: 700, color: C.tx }}><Icon name="chess" size={24} /> vs Computer <span style={{ color: C.txMut, fontWeight: 400, fontSize: "var(--fs-caption)" }}>({difficulty.label})</span></div>
         <span style={{ fontSize: "var(--fs-caption)", color: C.txMut }}>{myColor === "w" ? "You: White" : "You: Black"}</span>

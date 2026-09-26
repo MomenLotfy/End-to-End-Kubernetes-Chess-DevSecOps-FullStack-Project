@@ -1,0 +1,94 @@
+# Frontend: stateless nginx serving the React build + same-origin proxy for
+# /api, /uploads, /socket.io (verified in the baked nginx.conf). 2 replicas
+# across the 2 AZs is safe (no local state) — unlike the backend, which is
+# pinned to 1 for architectural reasons (see backend-deployment.yaml).
+# Probes hit `/` (static index.html, zero dependencies). They MUST NOT use
+# /liveness or /readiness: those proxy to the BACKEND, and a frontend restart
+# storm caused by a sick backend would be a cascading failure.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chess-frontend
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "chess.componentLabels" (dict "ctx" . "component" "frontend") | nindent 4 }}
+spec:
+  replicas: {{ .Values.frontend.replicaCount }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      {{- include "chess.selectorLabels" (dict "ctx" . "component" "frontend") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "chess.selectorLabels" (dict "ctx" . "component" "frontend") | nindent 8 }}
+        {{- include "chess.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: chess-frontend
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: {{ .Values.frontend.terminationGracePeriodSeconds }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: frontend
+          image: {{ include "chess.image" (dict "registry" .Values.global.registry "repository" .Values.frontend.image.repository "digest" .Values.frontend.image.digest "context" "frontend") }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          livenessProbe:
+            httpGet: { path: /, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 5
+          readinessProbe:
+            httpGet: { path: /, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.frontend.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            # K8s nginx overlay (plain-HTTP 8080 serve; see configmap comment
+            # for the exact delta vs the baked compose config).
+            - name: nginx-conf
+              mountPath: /etc/nginx/conf.d/default.conf
+              subPath: default.conf
+              readOnly: true
+            # Writable paths proven by compose (read_only + tmpfs there).
+            - name: tmp
+              mountPath: /tmp
+            - name: nginx-cache
+              mountPath: /var/cache/nginx
+            - name: nginx-run
+              mountPath: /var/run
+      volumes:
+        - name: nginx-conf
+          configMap:
+            name: chess-frontend-nginx
+        - name: tmp
+          emptyDir: { sizeLimit: 32Mi }
+        - name: nginx-cache
+          emptyDir: { sizeLimit: 32Mi }
+        - name: nginx-run
+          emptyDir: { sizeLimit: 4Mi }

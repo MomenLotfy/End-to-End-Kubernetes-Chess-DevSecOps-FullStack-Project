@@ -1,0 +1,15 @@
+chess-observability installed in namespace {{ .Values.namespace.name }}.
+
+Pipeline: Alloy (DaemonSet) -> Prometheus :9090 + Loki :3100 -> Grafana :3000.
+Alerts: Prometheus -> Alertmanager :9093 -> staging webhook (ESO secret).
+
+Access (ClusterIP-only by design; nothing here is public):
+  kubectl -n {{ .Values.namespace.name }} port-forward svc/grafana 3000:3000
+  # admin user/password: ESO secret chess-observability (keys
+  # grafana-admin-user / grafana-admin-password)
+
+First-sync verification (USER-SIDE):
+  kubectl -n {{ .Values.namespace.name }} get pods
+  # expect: prometheus-0, loki-0, grafana-*, alertmanager-*, alloy-* (per node), kube-state-metrics-*
+  # Alloy dedup check (expect exactly 1 per job):
+  #   count by (job) (up{job=~"backend|kube-state-metrics|kubelet"})

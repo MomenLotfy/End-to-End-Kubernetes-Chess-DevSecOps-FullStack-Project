@@ -1,0 +1,10 @@
+apiVersion: v2
+name: chess-observability
+description: Staging SRE stack for chess (Wave 6) — Alloy + Prometheus + Loki + Grafana + Alertmanager + kube-state-metrics, no operator
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">= 1.30.0"
+keywords: [chess, observability, prometheus, grafana, loki, alloy]
+maintainers:
+  - name: chess-platform

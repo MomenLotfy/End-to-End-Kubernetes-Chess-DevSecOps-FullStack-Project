@@ -1,0 +1,141 @@
+# Default values for the chess chart. SAFE, FAIL-CLOSED defaults: image digests
+# and environment wiring are EMPTY and the chart refuses to render without
+# them (see templates/_helpers.tpl `chess.image` and `required` calls).
+#
+# Value layers (later wins):
+#   1. values.yaml (this file — shared safe defaults)
+#   2. values-staging.yaml (portable staging flavor, same repo)
+#   3. GitOps repo values (environment identity: registry, digests, RDS host,
+#      origins, ACM ARN, network CIDRs — updated by release commit-back)
+
+global:
+  environment: staging
+  # ECR registry host WITHOUT scheme, e.g.
+  # 123456789012.dkr.ecr.us-east-1.amazonaws.com (GitOps values provide it).
+  registry: ""
+  awsRegion: us-east-1
+
+namespace:
+  name: chess-staging
+
+observability:
+  # Namespace of the Wave 6 stack (Alloy scrapes backend :5000/metrics).
+  # Must match chess-observability namespace.name (kept in sync by review;
+  # the Wave 6 static checks assert equality).
+  namespace: chess-observability
+
+backend:
+  image:
+    repository: chess-backend
+    # Immutable digest from the Wave 3 release (sha256:...). NEVER a tag.
+    digest: ""
+  # NOTE: there is deliberately NO backend replicaCount knob. Replicas are
+  # hardcoded to 1 in the template (Socket.io/in-memory state, ADR-002/Wave 7).
+  # Setting backend.replicaCount to anything but 1 fails rendering on purpose.
+  # Wave 7 Phase 3: socket fan-out mode. local (default) = in-process adapter
+  # (single replica). redis = Valkey adapter (requires redis.host + the
+  # chess-redis ESO secret; the chart refuses to render redis mode without
+  # both). Flipped to redis only when replicas are enabled (Phase 7).
+  socketAdapter: local
+  resources:
+    requests: { cpu: 250m, memory: 384Mi }
+    limits: { cpu: "1", memory: 768Mi }
+  terminationGracePeriodSeconds: 30
+  service:
+    # MUST stay "chess-backend": the frontend nginx upstream dials this DNS name.
+    name: chess-backend
+    port: 5000
+  uploads:
+    # PVC (EBS gp3 via the chart StorageClass). ReadWriteOnce + single replica
+    # forces a Recreate deployment strategy (documented in template).
+    size: 2Gi
+
+frontend:
+  image:
+    repository: chess-frontend
+    digest: ""
+  replicaCount: 2
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 256Mi }
+  terminationGracePeriodSeconds: 15
+  service:
+    name: chess-frontend
+    port: 80
+    targetPort: 8080
+
+migration:
+  image:
+    repository: chess-migration
+    digest: ""
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 256Mi }
+  activeDeadlineSeconds: 600
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 3600
+
+database:
+  # RDS wiring comes from GitOps values (Terraform outputs, non-secret).
+  host: ""
+  port: 5432
+  name: chess_db
+  ssl: "true"
+
+# Wave 7: avatar object storage. storage=local preserves pre-Wave-7 behavior
+# (PVC disk); storage=s3 uses the private bucket via the backend IRSA role.
+# bucket comes from GitOps values (Terraform output avatars_bucket_name).
+# legacyFallback keeps pre-migration local files readable during the backfill
+# window and is LOUD (s3_legacy_fallback_reads_total) — never silent.
+avatars:
+  storage: local
+  bucket: ""
+  legacyFallback: "true"
+
+aws:
+  # Backend IRSA role ARN (Terraform output backend_role_arn, via GitOps).
+  # Empty = no annotation rendered (local/dev). REQUIRED for avatars.storage=s3
+  # (the chart fails rendering otherwise); the pod holds no AWS credentials.
+  backendRoleArn: ""
+
+# Backend origin allow-list (FRONTEND_URL). HTTPS, GitOps-provided staging host.
+origins:
+  frontendUrl: ""
+
+ingress:
+  enabled: true
+  className: alb
+  # Public staging host, e.g. staging.chess.example.com (GitOps values).
+  host: ""
+  # ACM certificate ARN for TLS termination (GitOps values; never invented).
+  certificateArn: ""
+  scheme: internet-facing
+  targetType: ip
+
+networkPolicies:
+  enabled: true
+  # VPC CIDR = documented ALB->frontend source (GitOps values).
+  vpcCidr: ""
+  # App-subnet CIDRs = kubelet probe sources (GitOps values, list).
+  nodeCidrs: []
+
+eso:
+  secretStoreName: chess-aws
+  refreshInterval: 5m
+  # RDS-managed master secret ARN (Terraform output rds_master_user_secret_arn).
+  rdsMasterSecretArn: ""
+  # Owner-managed JSON secret name holding app credentials (see chart README).
+  appSecretName: chess/staging/app
+  # TF-created Valkey AUTH secret ARN (Terraform output redis_user_secret_arn).
+  redisSecretArn: ""
+
+# Wave 7: ephemeral Valkey endpoint (non-secret wiring; the AUTH credential
+# arrives via the chess-redis ESO secret, never here). host comes from GitOps
+# values (Terraform output redis_endpoint_address). TLS is mandatory on
+# serverless — there is no insecure mode, so no knob can disable it.
+redis:
+  host: ""
+  port: 6379
+
+storage:
+  className: chess-ebs-gp3

@@ -1,0 +1,10 @@
+# Explicit staging namespace. ArgoCD also sets CreateNamespace=true as a second
+# net; this manifest is the declarative record (labels + ownership).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.namespace.name }}
+  labels:
+    {{- include "chess.labels" . | nindent 4 }}
+    chess/owner: platform
+    chess/data-classification: staging-confidential

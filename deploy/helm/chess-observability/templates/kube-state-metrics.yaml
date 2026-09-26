@@ -1,0 +1,77 @@
+# kube-state-metrics: single replica (it only READS + serves; no storage).
+# Scraped by ALLOY (job=kube-state-metrics) — never directly by Prometheus
+# (single ingestion path, no duplicate series).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kube-state-metrics
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "obs.labels" . | nindent 4 }}
+    {{- include "obs.selectorLabels" (dict "component" "kube-state-metrics") | nindent 4 }}
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels:
+      {{- include "obs.selectorLabels" (dict "component" "kube-state-metrics") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "obs.labels" . | nindent 8 }}
+        {{- include "obs.selectorLabels" (dict "component" "kube-state-metrics") | nindent 8 }}
+    spec:
+      serviceAccountName: kube-state-metrics
+      automountServiceAccountToken: true
+      securityContext:
+        runAsUser: 65534
+        runAsGroup: 65534
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: kube-state-metrics
+          image: {{ include "obs.image" (dict "registry" .Values.global.registry "repository" .Values.kubeStateMetrics.image.repository "tag" .Values.kubeStateMetrics.image.tag "digest" .Values.kubeStateMetrics.image.digest "context" "kube-state-metrics") }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - --port=8080
+            - --telemetry-port=8081
+            - --resources=pods,nodes,deployments,daemonsets,statefulsets,replicasets,jobs,cronjobs,services,endpoints,namespaces,persistentvolumeclaims,persistentvolumes,ingresses,networkpolicies,poddisruptionbudgets,storageclasses,limitranges,resourcequotas,horizontalpodautoscalers,certificatesigningrequests,configmaps,replicationcontrollers,volumeattachments
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.kubeStateMetrics.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            seccompProfile: { type: RuntimeDefault }
+            capabilities: { drop: ["ALL"] }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kube-state-metrics
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "obs.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "obs.selectorLabels" (dict "component" "kube-state-metrics") | nindent 4 }}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP

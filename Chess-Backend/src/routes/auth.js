@@ -1,13 +1,12 @@
 const express = require("express");
 const { body, validationResult } = require("express-validator");
-const fs = require("fs/promises");
-const path = require("path");
 const User = require("../models/User");
 const Game = require("../models/Game");
 const AuthToken = require("../models/AuthToken");
 const GameTransaction = callback => Game.runInTransaction(callback);
 const { authMiddleware } = require("../middleware/auth");
-const { upload, inspectAndStoreAvatar, uploadErrorHandler, UPLOAD_DIR } = require("../middleware/upload");
+const { upload, inspectAndStoreAvatar, uploadErrorHandler } = require("../middleware/upload");
+const { managedAvatarFilename, deleteAvatar } = require("../services/avatarStore");
 const { sendAccountLink } = require("../services/mail");
 const {
   REFRESH_COOKIE, signAccessToken, setAccessCookie, setRefreshCookie, clearAuthCookies,
@@ -17,10 +16,6 @@ const logger = require("../config/logger");
 const router = express.Router();
 const validationFailure = res => res.status(400).json({ error: "Invalid request" });
 const DUMMY_PASSWORD_HASH = "$2a$12$6250ZAToqFIWsZEzPEUYvueERVyn/GzecXv/J0aiGdO4/mTg0Ou1.";
-const managedAvatarFilename = value => {
-  const match = /^\/uploads\/avatars\/(user\d+-[0-9a-f-]+\.webp)$/.exec(value || "");
-  return match?.[1] || null;
-};
 
 async function establishSession(res, user) {
   const refresh = await AuthToken.issueRefreshToken(user.id);
@@ -219,12 +214,12 @@ router.post("/avatar", authMiddleware, upload.single("avatar"), uploadErrorHandl
     const replacement = await User.replaceAvatar(req.user.id, avatarUrl);
     if (!replacement) throw new Error("Avatar user missing");
     const oldName = managedAvatarFilename(replacement.previousAvatarUrl);
-    if (oldName) await fs.unlink(path.join(UPLOAD_DIR, oldName)).catch(error => {
-      if (error.code !== "ENOENT") logger.warn("Old avatar cleanup failed", { error: error.message });
-    });
+    if (oldName && !(await deleteAvatar(oldName))) {
+      logger.warn("Old avatar delete failed (orphan — see S3 runbook)");
+    }
     res.json({ user: replacement.user });
   } catch (err) {
-    await fs.unlink(path.join(UPLOAD_DIR, req.file.filename)).catch(() => {});
+    if (req.file?.filename) await deleteAvatar(req.file.filename).catch(() => false);
     logger.error("Avatar update failed", { error: err.stack });
     res.status(500).json({ error: "Unable to update avatar" });
   }

@@ -1,0 +1,33 @@
+# Alloy RBAC — the ONLY broad collector identity. Two permissions, both read-only:
+# - nodes (get/list/watch): discovery.kubernetes role=node enumerates kubelets.
+# - nodes/proxy (get): scrape kubelet :10250/metrics directly (cAdvisor
+#   container_* + node volume stats). The kubelet authorizes this SA via its
+#   own webhook; no other API access exists. No pods/services/endpoints/secrets.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: chess-obs-alloy
+  labels:
+    {{- include "obs.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["nodes/proxy"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: chess-obs-alloy
+  labels:
+    {{- include "obs.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: alloy
+    namespace: {{ .Values.namespace.name }}
+roleRef:
+  kind: ClusterRole
+  name: chess-obs-alloy
+  apiGroup: rbac.authorization.k8s.io

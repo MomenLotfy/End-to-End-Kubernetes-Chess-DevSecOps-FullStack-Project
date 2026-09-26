@@ -1,0 +1,15 @@
+# Frontend-only PDB (minAvailable 1 of 2 replicas). There is deliberately NO
+# backend PDB: with exactly 1 backend replica a PDB would either be a no-op
+# or imply multi-replica semantics that do not exist until Wave 7.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: chess-frontend
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "chess.componentLabels" (dict "ctx" . "component" "frontend") | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "chess.selectorLabels" (dict "ctx" . "component" "frontend") | nindent 6 }}

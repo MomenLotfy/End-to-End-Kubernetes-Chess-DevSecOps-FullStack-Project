@@ -3,6 +3,9 @@
 **/coverage
 **/build
 **/.env*
+**/*.pem
+**/*.key
+**/*.passphrase
 backups
 certs
 letsencrypt

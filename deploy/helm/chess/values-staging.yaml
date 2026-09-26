@@ -1,0 +1,22 @@
+# Staging flavor: PORTABLE settings only (no account IDs, no digests, no hosts).
+# Environment identity (registry, digests, RDS host, origins, ACM ARN, CIDRs)
+# lives in the SEPARATE GitOps repository and is layered on top by ArgoCD.
+# See deploy/helm/chess/README.md ("Value layers") + the GitOps bundle README.
+
+global:
+  environment: staging
+
+# Staging keeps chart-default sizing (requests/limits mirror the hardened
+# compose baseline). Production sizing requires observed workload data and is
+# revisited before Wave 8 — not here.
+backend:
+  terminationGracePeriodSeconds: 30
+
+frontend:
+  replicaCount: 2
+
+migration:
+  activeDeadlineSeconds: 600
+
+eso:
+  refreshInterval: 5m

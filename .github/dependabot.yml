@@ -1,0 +1,24 @@
+# Dependabot — Wave 0: alert + PR supply-chain signal for all four npm roots + Actions.
+# No auto-merge (Wave 2 may add grouped minor/patch auto-merge with CI green).
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/Chess-Backend"
+    schedule: { interval: "weekly", day: "monday" }
+    open-pull-requests-limit: 5
+  - package-ecosystem: "npm"
+    directory: "/Chess-Frontend"
+    schedule: { interval: "weekly", day: "monday" }
+    open-pull-requests-limit: 5
+  - package-ecosystem: "npm"
+    directory: "/Database/migrations"
+    schedule: { interval: "weekly", day: "monday" }
+    open-pull-requests-limit: 3
+  - package-ecosystem: "npm"
+    directory: "/e2e"
+    schedule: { interval: "weekly", day: "monday" }
+    open-pull-requests-limit: 3
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule: { interval: "weekly", day: "monday" }
+    open-pull-requests-limit: 5

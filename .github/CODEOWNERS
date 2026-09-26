@@ -1,0 +1,35 @@
+# CODEOWNERS — Wave 0 baseline
+# Owner handle verified via `gh repo view` (personal repo, no org teams available).
+# If this repo moves to an organization, replace @MomenLotfy entries with team handles
+# (e.g. @org/platform-team) per docs/security/wave0-baseline.md § ownership.
+
+# Default owner for everything
+* @MomenLotfy
+
+# Application code
+/Chess-Backend/ @MomenLotfy
+/Chess-Frontend/ @MomenLotfy
+/Database/ @MomenLotfy
+/e2e/ @MomenLotfy
+/tests/ @MomenLotfy
+
+# CI / supply chain
+/.github/ @MomenLotfy
+/.gitleaks.toml @MomenLotfy
+/.pre-commit-config.yaml @MomenLotfy
+
+# Infrastructure (legacy until Waves 4-5 replace it — see ADR-006/007/010)
+/EKS-TF/ @MomenLotfy
+/Jenkins-Server-TF/ @MomenLotfy
+/Jenkins-Pipeline-Code/ @MomenLotfy
+/Manifest-file/ @MomenLotfy
+/monitoring/ @MomenLotfy
+/terraform/ @MomenLotfy
+/helm-chess/ @MomenLotfy
+
+# Security configuration (require review even from owner via branch protection)
+/SECURITY.md @MomenLotfy
+/docs/security/ @MomenLotfy
+/docs/adr/ @MomenLotfy
+/scripts/provision-https.sh @MomenLotfy
+/scripts/renew-https.sh @MomenLotfy

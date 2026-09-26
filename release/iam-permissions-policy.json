@@ -1,0 +1,32 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ECRLogin",
+      "Effect": "Allow",
+      "Action": "ecr:GetAuthorizationToken",
+      "Resource": "*"
+    },
+    {
+      "Sid": "ECRPushPullDescribe",
+      "Effect": "Allow",
+      "Action": [
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:BatchGetImage",
+        "ecr:PutImage",
+        "ecr:InitiateLayerUpload",
+        "ecr:UploadLayerPart",
+        "ecr:CompleteLayerUpload",
+        "ecr:DescribeImages",
+        "ecr:DescribeRepositories",
+        "ecr:ListImages"
+      ],
+      "Resource": [
+        "arn:aws:ecr:__AWS_REGION__:__AWS_ACCOUNT_ID__:repository/chess-backend",
+        "arn:aws:ecr:__AWS_REGION__:__AWS_ACCOUNT_ID__:repository/chess-frontend",
+        "arn:aws:ecr:__AWS_REGION__:__AWS_ACCOUNT_ID__:repository/chess-migration"
+      ]
+    }
+  ]
+}

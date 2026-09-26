@@ -24,7 +24,7 @@ export default function OnlinePlay({ user, token, onExit }) {
 
   if (!nameConfirmed) {
     return (
-      <div className="cm-screen" style={{ minHeight: "100vh", background: C.bgGradient || C.bg, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "18px", fontFamily: "var(--font-ui)" }}>
+      <div className="cm-screen" style={{ minHeight: "100vh", background: C.bgGradient || C.bg, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "18px", fontFamily: "var(--font-ui)", padding: "24px 16px" }}>
         <div style={{ fontFamily: "var(--font-display)", fontSize: "var(--fs-display)", fontWeight: 800, color: C.tx }}>Play Online</div>
         <input style={{ ...inputStyle, width: "240px" }} placeholder="Your name" value={name} maxLength={20} onChange={e => setName(e.target.value)} onKeyDown={e => e.key === "Enter" && name.trim() && setNameConfirmed(true)} autoFocus />
         <Button variant="primary" disabled={!name.trim()} onClick={() => setNameConfirmed(true)}>Continue</Button>
@@ -35,7 +35,7 @@ export default function OnlinePlay({ user, token, onExit }) {
 
   if (mp.phase === "idle") {
     return (
-      <div className="cm-screen" style={{ minHeight: "100vh", background: C.bgGradient || C.bg, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "22px", fontFamily: "var(--font-ui)" }}>
+      <div className="cm-screen" style={{ minHeight: "100vh", background: C.bgGradient || C.bg, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "22px", fontFamily: "var(--font-ui)", padding: "24px 16px" }}>
         <div style={{ textAlign: "center" }}>
           <div style={{ fontFamily: "var(--font-display)", fontSize: "var(--fs-display)", fontWeight: 800, color: C.tx }}>Play Online</div>
           <div style={{ fontSize: "var(--fs-small)", color: C.txMut, marginTop: "4px" }}>Playing as <strong style={{ color: C.tx }}>{name}</strong>{!user && <span> (guest — sign in to track ELO)</span>}</div>
@@ -65,7 +65,7 @@ export default function OnlinePlay({ user, token, onExit }) {
 
   if (mp.phase === "waiting") {
     return (
-      <div className="cm-screen" style={{ minHeight: "100vh", background: C.bgGradient || C.bg, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "18px", fontFamily: "var(--font-ui)" }}>
+      <div className="cm-screen" style={{ minHeight: "100vh", background: C.bgGradient || C.bg, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "18px", fontFamily: "var(--font-ui)", padding: "24px 16px" }}>
         <div className="cm-breathe" style={{ fontSize: "var(--fs-h2)", color: C.tx, fontFamily: "var(--font-display)" }}>Waiting for opponent...</div>
         <div style={{ fontFamily: "var(--font-display)", fontSize: "2.2rem", fontWeight: 700, color: C.gold, letterSpacing: "0.2em", background: C.surface, border: `1px solid ${C.border}`, padding: "14px 32px", borderRadius: "var(--r-lg)", boxShadow: "var(--sh-md)" }}>{mp.roomId}</div>
         <Button variant="secondary" size="sm" onClick={() => navigator.clipboard?.writeText(mp.roomId)}>📋 Copy Room Code</Button>

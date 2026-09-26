@@ -1,10 +1,8 @@
 const crypto = require("crypto");
-const fs = require("fs/promises");
-const path = require("path");
 const multer = require("multer");
 const sharp = require("sharp");
+const { writeAvatar, LOCAL_DIR: UPLOAD_DIR } = require("../services/avatarStore");
 
-const UPLOAD_DIR = path.join(__dirname, "..", "..", "uploads", "avatars");
 const MAX_UPLOAD_BYTES = 2 * 1024 * 1024;
 
 const upload = multer({
@@ -58,14 +56,18 @@ async function inspectAndStoreAvatar(req, res, next) {
   if (!req.file?.buffer) return res.status(400).json({ error: "A valid image is required" });
   try {
     const normalized = await decodeAndNormalizeImage(req.file.buffer);
-    await fs.mkdir(UPLOAD_DIR, { recursive: true, mode: 0o750 });
     const filename = `user${req.user.id}-${crypto.randomUUID()}.webp`;
-    await fs.writeFile(path.join(UPLOAD_DIR, filename), normalized, { mode: 0o640, flag: "wx" });
+    // Wave 7: the store (local disk | S3) is chosen by AVATAR_STORAGE. A store
+    // failure is a 500 (not a 400): the image was valid, persistence failed.
+    await writeAvatar({ filename, buffer: normalized });
     req.file.filename = filename;
     req.file.normalizedSize = normalized.length;
     next();
   } catch (error) {
     if (error.code === "LIMIT_FILE_SIZE") return res.status(413).json({ error: "Avatar must not exceed 2 MB" });
+    if (error.message === "Unable to store avatar") {
+      return res.status(500).json({ error: "Unable to store avatar" });
+    }
     return res.status(400).json({ error: "A valid PNG, JPEG, GIF, or WebP image is required" });
   }
 }

@@ -43,8 +43,8 @@ export default function AuthModal({ onClose, onSuccess }) {
   );
 
   return (
-    <div className="cm-fade-in" onClick={e => e.target === e.currentTarget && onClose()} style={{ position: "fixed", inset: 0, background: "rgba(6,4,2,0.8)", backdropFilter: "blur(3px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 999 }}>
-      <div className="cm-modal-pop" style={{ background: `linear-gradient(155deg, ${C.surfaceHover}, ${C.modalBg})`, border: `1px solid ${C.border}`, borderRadius: "var(--r-xl)", padding: "32px 34px", width: "320px", display: "flex", flexDirection: "column", gap: "14px", boxShadow: "var(--sh-lg)" }}>
+    <div className="cm-fade-in" onClick={e => e.target === e.currentTarget && onClose()} style={{ position: "fixed", inset: 0, background: "rgba(6,4,2,0.8)", backdropFilter: "blur(3px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 999, padding: "12px" }}>
+      <div className="cm-modal-pop" style={{ background: `linear-gradient(155deg, ${C.surfaceHover}, ${C.modalBg})`, border: `1px solid ${C.border}`, borderRadius: "var(--r-xl)", padding: "min(32px, 7vw) min(34px, 7vw)", width: "min(320px, 94vw)", display: "flex", flexDirection: "column", gap: "14px", boxShadow: "var(--sh-lg)" }}>
         <div style={{ textAlign: "center" }}>
           <div style={{ fontFamily: "var(--font-display)", fontSize: "var(--fs-h1)", fontWeight: 700, color: C.gold }}>{mode === "login" ? "♞ Sign In" : mode === "register" ? "♞ Register" : "Reset password"}</div>
         </div>

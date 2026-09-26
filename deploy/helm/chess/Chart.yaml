@@ -1,0 +1,16 @@
+apiVersion: v2
+name: chess
+description: Chess full-stack application for EKS staging (ArgoCD/GitOps managed, digest-pinned images)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">= 1.30.0"
+keywords:
+  - chess
+  - staging
+  - gitops
+home: https://github.com/MomenLotfy/End-to-End-Kubernetes-Chess-DevSecOps-FullStack-Project
+sources:
+  - https://github.com/MomenLotfy/End-to-End-Kubernetes-Chess-DevSecOps-FullStack-Project/tree/main/deploy/helm/chess
+annotations:
+  chess/architecture-invariants: "backend replicas=1 (ADR-002); images by digest only; secrets via ESO (never plaintext)"

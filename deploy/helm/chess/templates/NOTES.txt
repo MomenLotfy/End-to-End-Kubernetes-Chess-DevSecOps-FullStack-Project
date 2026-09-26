@@ -1,0 +1,12 @@
+chess {{ .Values.global.environment }} (release {{ .Release.Name }}) queued for sync.
+
+INVARIANTS (enforced, not advisory):
+- Backend replicas = 1 (ADR-002; scale-out is Wave 7). The chart fails closed
+  on any other value.
+- All images are digest-pinned Wave 3 releases (tags are rejected at render).
+- Secrets arrive via ESO (chess-db-master, chess-app). If pods block on
+  missing secrets, ESO/SecretStore is not synced yet — see runbook.
+
+ entrypoint: https://{{ .Values.ingress.host }} (ALB, ACM TLS)
+ backend:    ClusterIP chess-backend:5000 (never directly public)
+ database:   {{ .Values.database.host }}:{{ .Values.database.port }}/{{ .Values.database.name }} (RDS, TLS enforced)

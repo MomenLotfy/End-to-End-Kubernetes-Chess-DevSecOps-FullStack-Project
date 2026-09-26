@@ -1,0 +1,56 @@
+# Loki single-binary config. auth_enabled=false is SAFE here: Loki is
+# ClusterIP/headless-only inside a default-deny namespace (netpol), reachable
+# solely from Alloy (push) + Grafana (query). No multi-tenancy in staging.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loki-config
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "obs.labels" . | nindent 4 }}
+data:
+  loki.yaml: |
+    auth_enabled: false
+    server:
+      http_listen_port: 3100
+      log_level: info
+    common:
+      path_prefix: /loki
+      replication_factor: 1
+      ring:
+        kvstore:
+          store: inmemory
+    schema_config:
+      configs:
+        - from: 2026-01-01
+          store: tsdb
+          object_store: filesystem
+          schema: v13
+          index:
+            prefix: loki_index_
+            period: 24h
+    storage_config:
+      tsdb_shipper:
+        active_index_directory: /loki/tsdb-index
+        cache_location: /loki/tsdb-cache
+      filesystem:
+        directory: /loki/chunks
+    compactor:
+      working_directory: /loki/compactor
+      compaction_interval: 10m
+      retention_enabled: true
+      retention_delete_delay: 2h
+      retention_delete_worker_count: 150
+    limits_config:
+      retention_period: {{ .Values.loki.retention }}
+      reject_old_samples: true
+      reject_old_samples_max_age: 168h
+      ingestion_rate_mb: 8
+      ingestion_burst_size_mb: 16
+      max_label_names_per_series: 15
+    ruler:
+      enable_api: false
+      storage:
+        type: local
+        local:
+          directory: /loki/rules

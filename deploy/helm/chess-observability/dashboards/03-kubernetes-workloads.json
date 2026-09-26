@@ -1,0 +1,90 @@
+{
+  "title": "Kubernetes / Workloads",
+  "uid": "chess-k8s",
+  "tags": ["chess", "staging", "kubernetes"],
+  "timezone": "utc",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-3h", "to": "now" },
+  "templating": { "list": [] },
+  "links": [],
+  "panels": [
+    {
+      "id": 1, "type": "stat", "title": "Ready pods (chess namespaces)",
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 6 },
+      "datasource": { "type": "prometheus", "uid": "chess-prometheus" },
+      "targets": [{ "refId": "A", "expr": "sum(kube_pod_status_phase{namespace=~\"chess-.*\",phase=\"Running\"})", "legendFormat": "running" }],
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center" }
+    },
+    {
+      "id": 2, "type": "stat", "title": "Restarts (1h, all chess pods)",
+      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 6 },
+      "datasource": { "type": "prometheus", "uid": "chess-prometheus" },
+      "targets": [{ "refId": "A", "expr": "sum(increase(kube_pod_container_status_restarts_total{namespace=~\"chess-.*\"}[1h]))", "legendFormat": "restarts" }],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [{ "value": 0, "color": "green" }, { "value": 1, "color": "yellow" }, { "value": 6, "color": "red" } ] }}, "overrides": [] },
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center" }
+    },
+    {
+      "id": 3, "type": "stat", "title": "Deployments unavailable",
+      "gridPos": { "x": 12, "y": 0, "w": 6, "h": 6 },
+      "datasource": { "type": "prometheus", "uid": "chess-prometheus" },
+      "targets": [{ "refId": "A", "expr": "sum(kube_deployment_status_replicas_unavailable{namespace=~\"chess-.*\"})", "legendFormat": "unavailable" }],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [{ "value": 0, "color": "green" }, { "value": 1, "color": "red" } ] }}, "overrides": [] },
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center" }
+    },
+    {
+      "id": 4, "type": "stat", "title": "Failed jobs (chess-staging)",
+      "gridPos": { "x": 18, "y": 0, "w": 6, "h": 6 },
+      "datasource": { "type": "prometheus", "uid": "chess-prometheus" },
+      "targets": [{ "refId": "A", "expr": "sum(kube_job_status_failed{namespace=\"chess-staging\"})", "legendFormat": "failed" }],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [{ "value": 0, "color": "green" }, { "value": 1, "color": "red" } ] }}, "overrides": [] },
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "center" }
+    },
+    {
+      "id": 5, "type": "timeseries", "title": "CPU usage vs limits (by pod)",
+      "gridPos": { "x": 0, "y": 6, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "chess-prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=~\"chess-.*\",container!=\"\"}[5m]))", "legendFormat": "used {{pod}}" },
+        { "refId": "B", "expr": "sum by (pod) (kube_pod_container_resource_limits{namespace=~\"chess-.*\",resource=\"cpu\"})", "legendFormat": "limit {{pod}}" }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right" } }
+    },
+    {
+      "id": 6, "type": "timeseries", "title": "Memory working set vs limits (by pod)",
+      "gridPos": { "x": 12, "y": 6, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "chess-prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum by (pod) (container_memory_working_set_bytes{namespace=~\"chess-.*\",container!=\"\"})", "legendFormat": "used {{pod}}" },
+        { "refId": "B", "expr": "sum by (pod) (kube_pod_container_resource_limits{namespace=~\"chess-.*\",resource=\"memory\"})", "legendFormat": "limit {{pod}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right" } }
+    },
+    {
+      "id": 7, "type": "timeseries", "title": "Deployment replicas desired vs available",
+      "gridPos": { "x": 0, "y": 14, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "chess-prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum by (deployment) (kube_deployment_spec_replicas{namespace=~\"chess-.*\"})", "legendFormat": "desired {{deployment}}" },
+        { "refId": "B", "expr": "sum by (deployment) (kube_deployment_status_replicas_available{namespace=~\"chess-.*\"})", "legendFormat": "available {{deployment}}" }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right" } }
+    },
+    {
+      "id": 8, "type": "timeseries", "title": "PVC usage",
+      "gridPos": { "x": 12, "y": 14, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "chess-prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum by (persistentvolumeclaim) (kubelet_volume_stats_used_bytes{namespace_name=~\"chess-.*\"})", "legendFormat": "used {{persistentvolumeclaim}}" },
+        { "refId": "B", "expr": "sum by (persistentvolumeclaim) (kubelet_volume_stats_capacity_bytes{namespace_name=~\"chess-.*\"})", "legendFormat": "capacity {{persistentvolumeclaim}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right" } }
+    }
+  ]
+}

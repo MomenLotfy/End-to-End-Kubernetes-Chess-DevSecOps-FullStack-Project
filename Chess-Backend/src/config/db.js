@@ -1,5 +1,7 @@
 const { Pool } = require("pg");
 const logger = require("./logger");
+const { instrumentPool } = require("../metrics/db");
+const { appErrorsTotal } = require("../metrics");
 
 function sslConfiguration(env = process.env) {
   if (env.DB_SSL !== "true") return undefined;
@@ -21,7 +23,12 @@ const pool = new Pool({
   application_name: "chess-backend",
 });
 
-pool.on("error", error => logger.error("PostgreSQL pool error", { error: error.message }));
+instrumentPool(pool);
+
+pool.on("error", error => {
+  logger.error("PostgreSQL pool error", { error: error.message });
+  try { appErrorsTotal.inc({ component: "db" }); } catch { /* drop */ }
+});
 
 async function connectDB() {
   const client = await pool.connect();

@@ -1,0 +1,307 @@
+# Wave 2 — fail-closed PR/push CI gate.
+# Required status check: the `ci` aggregator job (see bottom). Branch protection must
+# require `ci` (owner action — see docs/security/wave2-baseline.md).
+# Policy: secrets / SAST / SCA(high+) / tests / build / Dockerfile errors /
+# image vulns(high+) / fs vulns(high+) all BLOCK. Informational-only signal lives in
+# security-scheduled.yml. Legacy infra checks live in infra-validation.yml (report-only
+# with justification — legacy is non-authoritative until Waves 4-5).
+# All third-party actions are pinned to full commit SHAs (release tag in comment).
+
+name: ci
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    paths:
+      - "Chess-Backend/**"
+      - "Chess-Frontend/**"
+      - "Database/**"
+      - "docker-compose*.yml"
+      - "tests/**"
+      - "e2e/**"
+      - "scripts/**"
+      - ".github/workflows/ci.yml"
+      - ".gitleaks.toml"
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "22"
+
+jobs:
+  secret-scan:
+    name: secret-scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Gitleaks detect
+        # No license needed: this repo is a personal account (see wave2 baseline).
+        # GITLEAKS_CONFIG pins the single repo config — no competing secret config.
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+          GITLEAKS_ENABLE_COMMENTS: false
+
+  sast:
+    name: sast (CodeQL)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
+        with:
+          languages: javascript-typescript
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
+        with:
+          category: "/language:javascript-typescript"
+
+  sca:
+    name: sca (npm audit)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        dir: [Chess-Backend, Chess-Frontend, Database/migrations, e2e]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: ${{ matrix.dir }}/package-lock.json
+      - name: Install (lockfile-verified)
+        working-directory: ${{ matrix.dir }}
+        run: npm ci --no-audit --no-fund
+      - name: Audit production deps (blocks on high/critical)
+        working-directory: ${{ matrix.dir }}
+        # Policy: high+ in the shipped dependency closure blocks. The known frontend
+        # moderate findings are dev-server-only (see wave2 baseline) and stay below
+        # the blocking threshold by design — no suppression entries exist.
+        run: npm audit --omit=dev --audit-level=high
+      - name: Full audit report (informational artifact)
+        if: always()
+        working-directory: ${{ matrix.dir }}
+        run: npm audit --json > npm-audit-full.json || true
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: npm-audit-${{ matrix.dir }}
+          path: ${{ matrix.dir }}/npm-audit-full.json
+          retention-days: 7
+
+  dependency-review:
+    name: dependency-review
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail_on_severity: high
+          # License gating deferred: severity-only until the SBOM/license inventory
+          # lands with the Wave 3 release pipeline.
+
+  test-backend:
+    name: test-backend
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: Chess-Backend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: Chess-Backend/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm test -- --runInBand
+
+  test-frontend:
+    name: test-frontend
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: Chess-Frontend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: Chess-Frontend/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm test -- --watchAll=false
+        env:
+          CI: "true"
+      - run: npm run build
+
+  dockerfile-lint:
+    name: dockerfile-lint (hadolint)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        dockerfile:
+          - Chess-Backend/Dockerfile
+          - Chess-Frontend/Dockerfile
+          - Database/migrations/Dockerfile
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Lint Dockerfile
+        uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
+        with:
+          dockerfile: ${{ matrix.dockerfile }}
+          # Policy: errors block (replaces legacy no-fail:true). Warnings are reported
+          # in logs for triage; escalate to warning threshold only with justification.
+          failure-threshold: error
+
+  config-validate:
+    name: config-validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Validate compose YAML
+        run: python3 -c "import yaml; [yaml.safe_load(open(f)) for f in ['docker-compose.yml','docker-compose.test.yml']]; print('compose YAML OK')"
+      - name: Validate gitleaks config
+        run: python3 -c "import tomllib; tomllib.load(open('.gitleaks.toml','rb')); print('gitleaks TOML OK')"
+      - name: Validate shell scripts
+        run: bash -n scripts/backup-postgres.sh && bash -n scripts/restore-postgres.sh && echo "shell OK"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Syntax-check backend + migration JS
+        run: |
+          for f in Chess-Backend/src/*.js Chess-Backend/src/*/*.js Chess-Backend/tests/*.js Database/migrations/*.js; do
+            node --check "$f" || exit 1
+          done
+          echo "node syntax OK"
+
+  build-and-scan:
+    name: build-and-scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: backend
+            context: Chess-Backend
+          - name: frontend
+            context: Chess-Frontend
+          - name: migration
+            context: Database/migrations
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build image (no push)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ matrix.context }}
+          load: true
+          tags: chess-${{ matrix.name }}:ci
+          build-args: GIT_SHA=${{ github.sha }}
+      - name: Trivy image scan (blocks on high/critical)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: chess-${{ matrix.name }}:ci
+          severity: HIGH,CRITICAL
+          format: sarif
+          output: trivy-image-${{ matrix.name }}.sarif
+          exit-code: "1"
+      - name: Upload SARIF (same-repo runs)
+        # Fork PRs get a read-only token that cannot upload SARIF; results still
+        # fail the job above and are preserved as an artifact below.
+        if: ${{ !github.event.pull_request.head.repo.fork }}
+        uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
+        with:
+          sarif_file: trivy-image-${{ matrix.name }}.sarif
+          category: trivy-image-${{ matrix.name }}
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: trivy-image-${{ matrix.name }}
+          path: trivy-image-${{ matrix.name }}.sarif
+          retention-days: 7
+
+  trivy-fs:
+    name: trivy-fs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Trivy filesystem scan (blocks on high/critical)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          # Secret scanning is owned solely by gitleaks + .gitleaks.toml (single config
+          # rule); trivy covers vuln + misconfig here to avoid competing secret configs.
+          scanners: vuln,misconfig
+          severity: HIGH,CRITICAL
+          format: sarif
+          output: trivy-fs.sarif
+          exit-code: "1"
+      - name: Upload SARIF (same-repo runs)
+        if: ${{ !github.event.pull_request.head.repo.fork }}
+        uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-fs
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: trivy-fs
+          path: trivy-fs.sarif
+          retention-days: 7
+
+  ci:
+    # Single required status check for branch protection: fails if any gate failed.
+    # (Skipped jobs — e.g. dependency-review on push — count as satisfied.)
+    name: ci
+    runs-on: ubuntu-latest
+    needs: [secret-scan, sast, sca, dependency-review, test-backend, test-frontend, dockerfile-lint, config-validate, build-and-scan, trivy-fs]
+    if: always()
+    permissions: {}
+    steps:
+      - name: Aggregate gate result
+        run: |
+          echo '${{ toJSON(needs) }}' | python3 -c "
+          import json, sys
+          needs = json.load(sys.stdin)
+          bad = {k: v['result'] for k, v in needs.items() if v['result'] not in ('success', 'skipped')}
+          print('gate results:', {k: v['result'] for k, v in needs.items()})
+          sys.exit(1 if bad else 0)
+          "

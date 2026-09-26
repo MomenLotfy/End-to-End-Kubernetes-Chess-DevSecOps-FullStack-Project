@@ -1,0 +1,127 @@
+# Grafana: single replica, sqlite on a 2Gi encrypted PVC (staging; Postgres is
+# a Wave 8 item). ClusterIP-only — admin access via kubectl port-forward (no
+# ingress, no public exposure). Admin credentials from ESO (never in git).
+# Runs as UID 472 (image default). Zero plugins (minimized attack surface).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "obs.labels" . | nindent 4 }}
+    {{- include "obs.selectorLabels" (dict "component" "grafana") | nindent 4 }}
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels:
+      {{- include "obs.selectorLabels" (dict "component" "grafana") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "obs.labels" . | nindent 8 }}
+        {{- include "obs.selectorLabels" (dict "component" "grafana") | nindent 8 }}
+    spec:
+      serviceAccountName: grafana
+      automountServiceAccountToken: false
+      securityContext:
+        runAsUser: 472
+        runAsGroup: 472
+        runAsNonRoot: true
+        fsGroup: 472
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: grafana
+          image: {{ include "obs.image" (dict "registry" .Values.global.registry "repository" .Values.grafana.image.repository "tag" .Values.grafana.image.tag "digest" .Values.grafana.image.digest "context" "grafana") }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              valueFrom: { secretKeyRef: { name: chess-observability, key: grafana-admin-user } }
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom: { secretKeyRef: { name: chess-observability, key: grafana-admin-password } }
+            - name: GF_USERS_ALLOW_SIGN_UP
+              value: "false"
+            - name: GF_AUTH_DISABLE_LOGIN_FORM
+              value: "false"
+            - name: GF_SERVER_ROOT_URL
+              value: http://grafana:3000/
+            - name: GF_DASHBOARDS_MIN_REFRESH_INTERVAL
+              value: 30s
+            - name: GF_PATHS_PROVISIONING
+              value: /etc/grafana/provisioning
+          livenessProbe:
+            httpGet: { path: /api/health, port: http }
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet: { path: /api/health, port: http }
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.grafana.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            readOnlyRootFilesystem: false
+            seccompProfile: { type: RuntimeDefault }
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/grafana
+            - name: datasources
+              mountPath: /etc/grafana/provisioning/datasources
+              readOnly: true
+            - name: dashboards-provider
+              mountPath: /etc/grafana/provisioning/dashboards
+              readOnly: true
+            - name: dashboards
+              mountPath: /var/lib/grafana/dashboards
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: grafana-data }
+        - name: datasources
+          configMap: { name: grafana-datasources }
+        - name: dashboards-provider
+          configMap: { name: grafana-dashboards-provider }
+        - name: dashboards
+          configMap: { name: grafana-dashboards }
+---
+# NOTE: readOnlyRootFilesystem=false is a DOCUMENTED exception — Grafana
+# (sqlite + plugins dir + provisioning writes) requires a writable root.
+# Mitigations: non-root UID 472, drop ALL, ClusterIP-only, default-deny netpol.
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "obs.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "obs.selectorLabels" (dict "component" "grafana") | nindent 4 }}
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+      protocol: TCP
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana-data
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "obs.labels" . | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: {{ .Values.storage.storageClassName }}
+  resources:
+    requests: { storage: {{ .Values.grafana.storageSize }} }

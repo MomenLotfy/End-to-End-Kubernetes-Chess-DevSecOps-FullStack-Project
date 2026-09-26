@@ -14,8 +14,12 @@ export default function PieceGlyph({ piece, size = 44, medallion = false }) {
   const symbol = PIECES[piece];
   const isLetter = symbol && symbol.length === 1 && /[A-Za-z]/.test(symbol);
 
+  // size may be a number (px) or a CSS length (e.g. "calc(var(--sq) * 0.8)")
+  // for fluid rendering; scale with calc() in the latter case.
+  const mul = (f) => (typeof size === "number" ? size * f : `calc(${size} * ${f})`);
+
   const glyphStyle = {
-    fontSize: isLetter ? size * 0.5 : size * 0.82,
+    fontSize: isLetter ? mul(0.5) : mul(0.82),
     fontWeight: isLetter ? 800 : 400,
     fontFamily: isLetter ? "var(--font-display)" : "inherit",
     lineHeight: 1,
@@ -42,7 +46,7 @@ export default function PieceGlyph({ piece, size = 44, medallion = false }) {
       display: "flex", alignItems: "center", justifyContent: "center",
       flexShrink: 0,
     }}>
-      <span style={{ ...glyphStyle, fontSize: isLetter ? size * 0.4 : size * 0.56 }}>{symbol}</span>
+      <span style={{ ...glyphStyle, fontSize: isLetter ? mul(0.4) : mul(0.56) }}>{symbol}</span>
     </div>
   );
 }

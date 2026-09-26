@@ -1,0 +1,51 @@
+# Gitleaks configuration — Wave 0 baseline
+# Extends the default ruleset. Exit code is 1 when leaks are found (CI-compatible);
+# Wave 2 wires `gitleaks detect --config .gitleaks.toml` as a required PR check.
+#
+# Every allowlist below maps to a classified finding in docs/security/wave0-baseline.md.
+# Nothing here suppresses an unclassified finding. Notably NOT allowlisted:
+#   monitoring/prometheus-values.yaml -> adminPassword "ChangeMe123!" (placeholder default
+#   credential; must be replaced in Wave 6; any live secret there must keep failing).
+
+title = "Chess platform secret scanning (Wave 0)"
+
+[extend]
+useDefault = true
+
+# --- Custom rule: forbidden placeholder secrets must never become live values ---
+# Guards the CHESS-001 regression class: these exact strings are documented placeholders.
+[[rules]]
+description = "Chess forbidden placeholder secret used as a value"
+id = "chess-forbidden-placeholder-secret"
+regex = '''(?i)(chess-secret-key|chess-jwt-secret-CHANGE-ME-IN-PRODUCTION|ChangeMe123!)'''
+tags = ["chess", "placeholder-secret"]
+
+# Intentional references only: the startup denylist, its tests, and audit documentation.
+[[rules.allowlists]]
+description = "denylist definition, placeholder-rejection tests, historical audit docs"
+paths = [
+  '''Chess-Backend/src/config/security\.js$''',
+  '''Chess-Backend/tests/.*''',
+  '''full report\.md$''',
+  '''docs/.*''',
+  '''\.gitleaks\.toml$''',
+]
+
+# --- Global allows (classified false positives / fixtures) ---
+
+[[allowlists]]
+description = "Generated jest coverage output (tracked cruft; entropy hits are file hashes). Cleanup candidate for Wave 1."
+paths = ['''Chess-Backend/coverage/.*''']
+
+[[allowlists]]
+description = "Test-fixture JWT secrets: descriptive low-entropy strings, test-only. Integration suite additionally refuses non-*_test databases."
+regexes = ['''(test|integration)-secret-that-is-longer-than-thirty-two-characters''']
+
+[[allowlists]]
+description = "Test-fixture passwords in SMTP integration test (xkcd-style literals, Mailpit/test SMTP only)."
+regexes = ['''Correct-Horse-Battery-[12]''']
+
+[[allowlists]]
+description = "E2E runtime-generated password template (Safe-<uuid>-Password!)."
+paths = ['''e2e/tests/.*''']
+regexes = ['''Safe-.*-Password!''']

@@ -1,0 +1,88 @@
+# Alloy: the ONE collector (ADR-009). DaemonSet because container logs are
+# node-local files; metrics scraping is CLUSTERED (targets distribute across
+# replicas — no duplicate series). No UID pinning: the image default is
+# non-root and Alloy writes nothing to disk (verified user-side; fallback in
+# chart README). Probes use /-/healthy + /-/ready (USER-SIDE: if a future
+# Alloy renames these, switch to tcpSocket per README).
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: alloy
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "obs.labels" . | nindent 4 }}
+    {{- include "obs.selectorLabels" (dict "component" "alloy") | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "obs.selectorLabels" (dict "component" "alloy") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "obs.labels" . | nindent 8 }}
+        {{- include "obs.selectorLabels" (dict "component" "alloy") | nindent 8 }}
+    spec:
+      serviceAccountName: alloy
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: alloy
+          image: {{ include "obs.image" (dict "registry" .Values.global.registry "repository" .Values.alloy.image.repository "tag" .Values.alloy.image.tag "digest" .Values.alloy.image.digest "context" "alloy") }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - run
+            - --server.http.listen-addr=0.0.0.0:12345
+            - --storage.path=/tmp/alloy
+            - /etc/alloy/config.alloy
+          env:
+            - name: NODE_NAME
+              valueFrom: { fieldRef: { fieldPath: spec.nodeName } }
+            - name: POD_NAME
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+          ports:
+            - name: http
+              containerPort: 12345
+              protocol: TCP
+          livenessProbe:
+            httpGet: { path: /-/healthy, port: http }
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: { path: /-/ready, port: http }
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.alloy.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            seccompProfile: { type: RuntimeDefault }
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alloy
+              readOnly: true
+            # DOCUMENTED hostPath exception (§28): container logs live here.
+            # Read-only; the whole /var/log is required because /var/log/pods
+            # entries are symlinks into /var/log/containers (same tree).
+            - name: varlog
+              mountPath: /var/log
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp/alloy
+      volumes:
+        - name: config
+          configMap: { name: alloy-config }
+        - name: varlog
+          hostPath: { path: /var/log, type: Directory }
+        - name: tmp
+          emptyDir: { sizeLimit: 128Mi }
+      terminationGracePeriodSeconds: 30
+      # Alloy must run on every node (logs are node-local) — no nodeSelector.

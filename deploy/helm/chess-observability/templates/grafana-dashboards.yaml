@@ -1,0 +1,15 @@
+# Dashboards as code: the JSON files in dashboards/ are embedded verbatim
+# (.Files.get output is NOT re-rendered, so Grafana {{label}} legend syntax
+# is safe). Static checks JSON-parse every file + assert datasource UIDs.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "obs.labels" . | nindent 4 }}
+data:
+  {{- range $path, $_ := .Files.Glob "dashboards/*.json" }}
+  {{ base $path }}: |
+{{ $.Files.Get $path | nindent 4 }}
+  {{- end }}

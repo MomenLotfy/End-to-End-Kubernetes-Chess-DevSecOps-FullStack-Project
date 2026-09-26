@@ -1,0 +1,138 @@
+# K8s nginx overlay: replaces /etc/nginx/conf.d/default.conf in the frontend pod.
+# DELTA vs the baked Chess-Frontend/nginx.conf (parity enforced by
+# scripts/wave5-static-checks.py):
+#   1. The 8443/TLS server block is REMOVED (ALB terminates public TLS via ACM;
+#      no certificate material exists inside the pod by design).
+#   2. The 8080 server SERVES the app over plain HTTP (same locations, limits,
+#      gzip, proxying, security headers) instead of redirecting to https://.
+#      HTTP->HTTPS redirect happens at the ALB listener, not in the pod.
+#   3. TLS-only lines (ssl_*, http2) and the certbot acme-challenge location
+#      are dropped (ACM replaces Let's Encrypt in EKS); everything else is
+#      identical, including `upstream chess_backend` (backend Service keeps
+#      that DNS name) and the hardcoded `X-Forwarded-Proto https` (always true
+#      behind the ALB).
+#   4. Wave 7 Phase 5 ADDS nginx real_ip (set_real_ip_from = the VPC CIDR
+#      already documented as the ALB source for NetworkPolicies, recursive):
+#      in EKS the direct peer is an ALB node, so without this both the edge
+#      limit_req zone AND the backend req.ip would key by ALB-node IP. With
+#      it, $binary_remote_addr (and the XFF the backend trusts, hops=1) is
+#      the true client the ALB appended. Compose needs no equivalent: there
+#      nginx's direct peer IS the client.
+# HSTS over pod-HTTP is ignored by browsers (harmless); browsers only ever see
+# the ALB's HTTPS responses carrying the same header.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: chess-frontend-nginx
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "chess.labels" . | nindent 4 }}
+data:
+  default.conf: |
+    limit_req_zone $binary_remote_addr zone=api_per_ip:10m rate=20r/s;
+
+    # Wave 7 Phase 5: attribute edge limiting (and the backend req.ip derived
+    # from the forwarded XFF) to the TRUE client. Direct peers are ALB nodes
+    # (inside the VPC CIDR, the same documented ALB source the NetworkPolicies
+    # use); recursive stripping walks past them to the client address the ALB
+    # appended, ignoring any spoofed client-supplied prefix. The backend keeps
+    # TRUST_PROXY_HOPS=1: post-rewrite it again sees exactly one trusted hop.
+    set_real_ip_from {{ required "networkPolicies.vpcCidr is required (VPC CIDR; documented ALB source)" .Values.networkPolicies.vpcCidr }};
+    real_ip_header X-Forwarded-For;
+    real_ip_recursive on;
+
+    upstream chess_backend {
+        server chess-backend:5000;
+        keepalive 32;
+    }
+
+    server {
+        listen 8080;
+        server_name _;
+        root /usr/share/nginx/html;
+        index index.html;
+
+        client_max_body_size 2m;
+        client_body_timeout 15s;
+        keepalive_timeout 65s;
+        send_timeout 30s;
+
+        gzip on;
+        gzip_vary on;
+        gzip_min_length 1024;
+        gzip_types text/plain text/css application/json application/javascript application/wasm image/svg+xml;
+
+        location /api/ {
+            limit_req zone=api_per_ip burst=40 nodelay;
+            proxy_pass http://chess_backend;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_connect_timeout 5s;
+            proxy_send_timeout 30s;
+            proxy_read_timeout 30s;
+        }
+
+        location ^~ /uploads/ {
+            proxy_pass http://chess_backend;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header Cookie $http_cookie;
+            proxy_connect_timeout 5s;
+            proxy_read_timeout 30s;
+        }
+
+        location /socket.io/ {
+            proxy_pass http://chess_backend;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_set_header Host $host;
+            proxy_set_header Origin $http_origin;
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header Cookie $http_cookie;
+            proxy_connect_timeout 5s;
+            proxy_send_timeout 75s;
+            proxy_read_timeout 75s;
+            proxy_buffering off;
+        }
+
+        location = /liveness {
+            proxy_pass http://chess_backend/liveness;
+            access_log off;
+        }
+        location = /readiness {
+            proxy_pass http://chess_backend/readiness;
+            access_log off;
+        }
+
+        location / {
+            try_files $uri $uri/ /index.html;
+        }
+
+        location ~* ^/static/.+\.[0-9a-f]{8,}\.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
+            expires 1y;
+            add_header Cache-Control "public, immutable";
+            try_files $uri =404;
+        }
+
+        location ^~ /stockfish/ {
+            add_header Cross-Origin-Embedder-Policy "require-corp" always;
+            add_header Cache-Control "public, max-age=604800" always;
+            try_files $uri =404;
+        }
+
+        server_tokens off;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()" always;
+        add_header Cross-Origin-Opener-Policy "same-origin" always;
+        add_header Cross-Origin-Embedder-Policy "require-corp" always;
+        add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; upgrade-insecure-requests" always;
+    }

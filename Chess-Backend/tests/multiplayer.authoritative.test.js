@@ -16,9 +16,19 @@ jest.mock("../src/models/Game", () => {
   const api = {
     create: jest.fn(async ({ roomId, whiteUserId, whiteUsername }) => {
       const game = { id: mockDb.nextId++, room_id: roomId, white_user_id: whiteUserId, white_username: whiteUsername,
-        black_user_id: null, black_username: null, status: "in_progress", board_fen: new Chess().fen() };
+        black_user_id: null, black_username: null, status: "in_progress", board_fen: new Chess().fen(),
+        started_at: new Date().toISOString(), result: null, winner_color: null };
       mockDb.games.set(game.id, game);
       return { ...game };
+    }),
+    // Wave 7 Phase 4: snapshot = game row + ordered moves (any status —
+    // acceptance is the caller's job, mirroring the real query).
+    findRoomSnapshot: jest.fn(async roomId => {
+      const game = [...mockDb.games.values()].find(g => g.room_id === roomId);
+      if (!game) return null;
+      const persisted_moves = mockDb.moves.filter(m => m.game_id === game.id)
+        .sort((a, b) => a.move_number - b.move_number);
+      return { ...game, persisted_moves };
     }),
     claimBlack: jest.fn(async (id, player) => {
       const game = mockDb.games.get(id);

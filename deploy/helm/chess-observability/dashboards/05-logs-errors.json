@@ -1,0 +1,54 @@
+{
+  "title": "Logs / Errors",
+  "uid": "chess-logs",
+  "tags": ["chess", "staging", "logs"],
+  "timezone": "utc",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-3h", "to": "now" },
+  "templating": { "list": [] },
+  "links": [],
+  "panels": [
+    {
+      "id": 1, "type": "logs", "title": "Backend errors",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 9 },
+      "datasource": { "type": "loki", "uid": "chess-loki" },
+      "targets": [{ "refId": "A", "expr": "{namespace=\"chess-staging\",container=\"backend\"} | json | level=\"error\"" }],
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": { "showTime": true, "showLabels": false, "wrapLogMessage": true, "sortOrder": "Descending" }
+    },
+    {
+      "id": 2, "type": "logs", "title": "Frontend (nginx) errors",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 9 },
+      "datasource": { "type": "loki", "uid": "chess-loki" },
+      "targets": [{ "refId": "A", "expr": "{namespace=\"chess-staging\",container=\"frontend\"} |~ \"\\\\s(4[0-9]{2}|5[0-9]{2})\\\\s|\\\\[error\\\\]\"" }],
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": { "showTime": true, "showLabels": false, "wrapLogMessage": true, "sortOrder": "Descending" }
+    },
+    {
+      "id": 3, "type": "logs", "title": "Migration job output",
+      "gridPos": { "x": 0, "y": 9, "w": 12, "h": 9 },
+      "datasource": { "type": "loki", "uid": "chess-loki" },
+      "targets": [{ "refId": "A", "expr": "{namespace=\"chess-staging\",container=\"migration\"}" }],
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": { "showTime": true, "showLabels": false, "wrapLogMessage": true, "sortOrder": "Descending" }
+    },
+    {
+      "id": 4, "type": "logs", "title": "Authentication failures",
+      "gridPos": { "x": 12, "y": 9, "w": 12, "h": 9 },
+      "datasource": { "type": "loki", "uid": "chess-loki" },
+      "targets": [{ "refId": "A", "expr": "{namespace=\"chess-staging\",container=\"backend\"} | json | message=~\"(?i).*auth.*(fail|reject|denied).*\" or level=\"warn\"" }],
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": { "showTime": true, "showLabels": false, "wrapLogMessage": true, "sortOrder": "Descending" }
+    },
+    {
+      "id": 5, "type": "logs", "title": "Database errors",
+      "gridPos": { "x": 0, "y": 18, "w": 24, "h": 9 },
+      "datasource": { "type": "loki", "uid": "chess-loki" },
+      "targets": [{ "refId": "A", "expr": "{namespace=\"chess-staging\",container=~\"backend|migration\"} | json | message=~\"(?i).*(database|postgres|pool|query|migration).*\" | level=~\"error|warn\"" }],
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": { "showTime": true, "showLabels": false, "wrapLogMessage": true, "sortOrder": "Descending" }
+    }
+  ]
+}

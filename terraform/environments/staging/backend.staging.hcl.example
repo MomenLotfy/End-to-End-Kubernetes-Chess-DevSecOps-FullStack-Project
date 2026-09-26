@@ -1,0 +1,11 @@
+# Copy to backend.local.hcl (git-ignored) and fill in YOUR state bucket from
+# the bootstrap step. The indirection keeps this tree account-agnostic.
+#
+#   cp backend.staging.hcl.example backend.local.hcl
+#   terraform init -backend-config=backend.staging.hcl
+
+bucket       = "CHANGEME-chess-terraform-state"
+key          = "chess/staging/terraform.tfstate"
+region       = "us-east-1"
+encrypt      = true
+use_lockfile = true

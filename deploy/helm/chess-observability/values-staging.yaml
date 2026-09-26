@@ -1,0 +1,13 @@
+# Staging overlay: portable knobs only (no identity, no secrets).
+namespace:
+  name: chess-observability
+
+prometheus:
+  retention: 15d
+  scrapeInterval: 30s
+
+loki:
+  retention: 168h
+
+networkPolicies:
+  enabled: true

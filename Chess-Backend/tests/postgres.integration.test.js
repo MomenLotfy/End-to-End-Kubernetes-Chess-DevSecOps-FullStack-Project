@@ -42,7 +42,8 @@ test("all migrations and required database objects exist", async () => {
   const migrations = await pool.query("SELECT filename, checksum FROM schema_migrations ORDER BY filename");
   expect(migrations.rows.map(row => row.filename)).toEqual([
     "001_init.sql", "002_game_features.sql", "003_achievements.sql", "004_friends.sql",
-    "005_tournaments.sql", "006_security_integrity.sql", "007_fullstack_hardening.sql",
+    "005_tournaments.sql", "006_add_game_board_fen.sql", "006_security_integrity.sql",
+    "007_fullstack_hardening.sql",
   ]);
   expect(migrations.rows.every(row => /^[a-f0-9]{64}$/.test(row.checksum))).toBe(true);
   const expectedConstraints = [

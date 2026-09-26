@@ -1,0 +1,114 @@
+# Ingress segmentation for chess-staging (EKS VPC CNI enforces NetworkPolicy).
+# Traffic matrix (see chart README for the full table):
+#   ALB     -> frontend :8080   (VPC CIDR source; the frontend IS public surface)
+#   nodes   -> pods :probes     (kubelet health checks from app-subnet CIDRs)
+#   frontend -> backend :5000   (same-origin proxy; podSelector, no IP ranges)
+#   (none)  -> migration        (default-deny; Jobs take no traffic)
+#   pods    -> DNS :53          (egress is OPEN — see below)
+#   backend/migration -> RDS    (egress open; the RDS security group is the
+#                                enforcement point: 5432 from the EKS cluster
+#                                SG only — Terraform, Wave 4)
+#   backend -> Valkey :6379      (Wave 7: SAME model as RDS — egress open, the
+#                                ElastiCache security group is the enforcement
+#                                point: 6379 from the EKS cluster SG only.
+#                                NO egress NetworkPolicy is added on purpose: a
+#                                backend-scoped egress policy would force broad
+#                                443 holes (S3/ECR/API have no FQDN selectors
+#                                under VPC CNI) with zero added signal, while
+#                                the SG already restricts 6379 to cluster
+#                                members. FQDN-aware egress is a Wave 8 item.)
+#
+# CONSERVATIVE SCOPE (documented, §15): ingress default-deny + explicit allows
+# ONLY. No egress default-deny in Wave 5: VPC CNI cannot express AWS-API
+# destinations (no FQDN selectors), so an egress lockdown would either break
+# ESO/ECR/control-plane traffic or demand broad 443 holes that add no real
+# signal. Full egress lockdown (FQDN-capable engine) is a Wave 7/8 item.
+{{- if .Values.networkPolicies.enabled }}
+---
+# 1. Namespace-wide ingress default-deny (DNS-safe: DNS is pod EGRESS, and no
+#    egress policy exists, so name resolution is unaffected).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "chess.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+# 2. Frontend ingress: ALB (target-type IP preserves VPC source IPs) + kubelet.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-frontend-ingress
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "chess.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "chess.selectorLabels" (dict "ctx" . "component" "frontend") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: {{ required "networkPolicies.vpcCidr is required (VPC CIDR; documented ALB source)" .Values.networkPolicies.vpcCidr }}
+      ports:
+        - protocol: TCP
+          port: 8080
+    - from:
+        {{- range $cidr := required "networkPolicies.nodeCidrs is required (app-subnet CIDRs for kubelet probes)" .Values.networkPolicies.nodeCidrs }}
+        - ipBlock:
+            cidr: {{ $cidr }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# 3. Backend ingress: frontend pods (proxy) + kubelet probes + Alloy scrapers
+#    (Wave 6: chess-observability/alloy -> :5000/metrics only). Nothing else —
+#    in particular NOT the VPC CIDR (the backend is never directly public).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-backend-ingress
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "chess.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "chess.selectorLabels" (dict "ctx" . "component" "backend") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "chess.selectorLabels" (dict "ctx" . "component" "frontend") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 5000
+    - from:
+        {{- range $cidr := required "networkPolicies.nodeCidrs is required (app-subnet CIDRs for kubelet probes)" .Values.networkPolicies.nodeCidrs }}
+        - ipBlock:
+            cidr: {{ $cidr }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 5000
+    # 3b. Alloy metrics scrape: namespace AND pod scoped (no other obs pod,
+    # no other namespace). /metrics only by convention (same port as the API;
+    # Alloy scrapes the path, nothing else is newly reachable).
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.observability.namespace }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: alloy
+      ports:
+        - protocol: TCP
+          port: 5000
+{{- end }}

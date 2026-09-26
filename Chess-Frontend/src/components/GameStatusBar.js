@@ -52,7 +52,7 @@ export default function GameStatusBar({ status, turn, hist, onNewGame, onUndo, c
         </div>
       )}
 
-      <div style={{ display: "flex", gap: "4px", background: C.pnl, border: `1px solid ${C.pnlBd}`, borderRadius: "var(--r-lg)", padding: "4px" }}>
+      <div style={{ display: "flex", gap: "4px", flexWrap: "wrap", justifyContent: "center", maxWidth: "100%", background: C.pnl, border: `1px solid ${C.pnlBd}`, borderRadius: "var(--r-lg)", padding: "4px" }}>
         {onHint && toolBtn("Hint", "💡", onHint, hintDisabled, false)}
         {toolBtn("Undo", "↶", onUndo, !canUndo, false)}
         {onShare && toolBtn("Share", "⤴", onShare, false, false)}

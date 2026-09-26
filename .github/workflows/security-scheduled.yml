@@ -1,0 +1,83 @@
+# Wave 2 — scheduled security signal (weekly + manual). Informational by design:
+# nothing here gates PRs (blocking lives in ci.yml). Findings land as artifacts and,
+# for trivy-fs on main, as code-scanning alerts. Dependabot (Wave 0) owns fix PRs.
+# Replaces dependency-security.yml, which scanned nonexistent Chess-V1/V2 paths and
+# placeholder Docker Hub images. All actions SHA-pinned (release tag in comment).
+
+name: security-scheduled
+
+on:
+  schedule:
+    - cron: "0 9 * * 1" # Mondays 09:00 UTC
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: security-scheduled-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "22"
+
+jobs:
+  npm-audit-full:
+    name: npm-audit-full
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        dir: [Chess-Backend, Chess-Frontend, Database/migrations, e2e]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: ${{ matrix.dir }}/package-lock.json
+      - run: npm ci --no-audit --no-fund
+        working-directory: ${{ matrix.dir }}
+      - name: Full audit (informational)
+        working-directory: ${{ matrix.dir }}
+        run: |
+          npm audit --json > npm-audit-weekly.json || true
+          python3 -c "
+          import json
+          v = json.load(open('npm-audit-weekly.json')).get('metadata', {}).get('vulnerabilities', {})
+          print('vulnerabilities:', {k: v.get(k, 0) for k in ('critical', 'high', 'moderate', 'low', 'info')})
+          " | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: npm-audit-weekly-${{ matrix.dir }}
+          path: ${{ matrix.dir }}/npm-audit-weekly.json
+          retention-days: 30
+
+  trivy-fs-weekly:
+    name: trivy-fs-weekly
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,misconfig
+          severity: HIGH,CRITICAL
+          format: sarif
+          output: trivy-fs-weekly.sarif
+          # Informational on schedule (no PR to block); PR blocking lives in ci.yml.
+          exit-code: "0"
+      - uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
+        with:
+          sarif_file: trivy-fs-weekly.sarif
+          category: trivy-fs-weekly

@@ -1,0 +1,87 @@
+# Wave 6 defaults. Versions pinned to verified stable releases (2026-09-22).
+# Images are TAG-pinned (digests unresolvable from a registry-blind sandbox;
+# USER-SIDE: resolve + pin digests per chart README, then set *.image.digest).
+global:
+  registry: ""
+  clusterName: chess-staging
+
+namespace:
+  name: chess-observability
+
+# --- component versions (verified latest stable; never "latest") ---
+prometheus:
+  image:
+    repository: prom/prometheus
+    tag: v3.14.0
+    digest: ""
+  retention: 15d
+  scrapeInterval: 30s
+  evaluationInterval: 30s
+  storageSize: 10Gi
+  resources:
+    requests: { cpu: 250m, memory: 256Mi }
+    limits: { cpu: "1", memory: 1Gi }
+
+alertmanager:
+  image:
+    repository: prom/alertmanager
+    tag: v0.34.1
+    digest: ""
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 200m, memory: 256Mi }
+
+loki:
+  image:
+    repository: grafana/loki
+    tag: 3.7.8
+    digest: ""
+  retention: 168h
+  storageSize: 5Gi
+  resources:
+    requests: { cpu: 250m, memory: 256Mi }
+    limits: { cpu: "1", memory: 1Gi }
+
+grafana:
+  image:
+    repository: grafana/grafana
+    tag: 13.2.2
+    digest: ""
+  storageSize: 2Gi
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+
+alloy:
+  image:
+    repository: grafana/alloy
+    tag: v1.19.2
+    digest: ""
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+
+kubeStateMetrics:
+  image:
+    repository: registry.k8s.io/kube-state-metrics/kube-state-metrics
+    tag: v2.20.0
+    digest: ""
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 200m, memory: 256Mi }
+
+storage:
+  storageClassName: chess-obs-gp3
+
+networkPolicies:
+  enabled: true
+  # App-subnet CIDRs (kubelet probes + kubectl port-forward, same values as
+  # the app chart wiring — duplicated here, NEVER widened silently).
+  nodeCidrs: []
+
+eso:
+  region: us-east-1
+  secretStoreName: chess-obs-secret-store
+  # Secrets Manager JSON secret holding grafana-admin-user,
+  # grafana-admin-password, alert-webhook-url (owner-created, L.3-style).
+  observabilitySecretName: chess/staging/observability

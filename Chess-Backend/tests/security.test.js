@@ -11,6 +11,7 @@ const { createApplication, installShutdownHandlers } = require("../src/server");
 const { authMiddleware } = require("../src/middleware/auth");
 const { signAccessToken, setAccessCookie, setRefreshCookie } = require("../src/services/tokens");
 const database = require("../src/config/db");
+const shutdown = require("../src/services/shutdown");
 
 test.each([undefined, "chess-jwt-secret-CHANGE-ME-IN-PRODUCTION", "chess-secret-key"])(
   "startup rejects missing or placeholder JWT_SECRET (%s)", value => {
@@ -81,6 +82,7 @@ test("graceful shutdown closes Socket.io, HTTP and PostgreSQL without abandoning
   expect(exit).toHaveBeenCalledWith(0);
   poolEnd.mockRestore();
   handlers.uninstall();
+  shutdown.resetShutdownForTests(); // Phase 6: drain state is process-global; restore RUNNING for later tests
 });
 
 test("avatar upload rejects a PNG/SVG polyglot by inspecting content", async () => {

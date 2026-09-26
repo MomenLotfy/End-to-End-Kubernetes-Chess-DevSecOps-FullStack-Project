@@ -1,0 +1,149 @@
+{{- include "chess.backendReplicaGuard" . -}}
+# Backend: EXACTLY 1 replica (hardcoded — no value knob exists). Reason
+# (ADR-002, Wave 7 gate): Socket.io rooms, vote state, room-operation chains
+# and rate limiting are process-local; a second replica would split brain.
+# Strategy is Recreate (NOT RollingUpdate): the uploads PVC is ReadWriteOnce,
+# so a surging second pod could never attach it (maxUnavailable 0 + surge 1
+# would deadlock the rollout). Brief staging downtime per deploy is accepted
+# and documented; Wave 7 (S3 uploads + Redis adapter) removes both limits.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chess-backend
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "chess.componentLabels" (dict "ctx" . "component" "backend") | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "chess.selectorLabels" (dict "ctx" . "component" "backend") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "chess.selectorLabels" (dict "ctx" . "component" "backend") | nindent 8 }}
+        {{- include "chess.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: chess-backend
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: {{ .Values.backend.terminationGracePeriodSeconds }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: backend
+          image: {{ include "chess.image" (dict "registry" .Values.global.registry "repository" .Values.backend.image.repository "digest" .Values.backend.image.digest "context" "backend") }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 5000
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: chess-backend-config
+          env:
+            # Least-privilege app identity (chess-app secret, NOT master creds).
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef: { name: chess-app, key: db-user }
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: chess-app, key: db-password }
+            - name: DB_SSL_CA
+              valueFrom:
+                secretKeyRef: { name: chess-app, key: db-ssl-ca }
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef: { name: chess-app, key: jwt-secret }
+            - name: FRONTEND_URL
+              valueFrom:
+                secretKeyRef: { name: chess-app, key: frontend-url }
+            - name: SMTP_HOST
+              valueFrom:
+                secretKeyRef: { name: chess-app, key: smtp-host }
+            - name: SMTP_PORT
+              valueFrom:
+                secretKeyRef: { name: chess-app, key: smtp-port }
+            - name: SMTP_USER
+              valueFrom:
+                secretKeyRef: { name: chess-app, key: smtp-user }
+            - name: SMTP_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: chess-app, key: smtp-password }
+            - name: EMAIL_FROM
+              valueFrom:
+                secretKeyRef: { name: chess-app, key: email-from }
+            # Wave 7 Phase 3: Valkey AUTH (chess-redis ESO secret). Consumed
+            # only when SOCKET_ADAPTER=redis; present-but-unused in local mode
+            # (the app never reads them unless redis mode is configured).
+            - name: REDIS_USERNAME
+              valueFrom:
+                secretKeyRef: { name: chess-redis, key: username }
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: chess-redis, key: password }
+          # Wave 7 Phase 6: trigger-then-sleep preStop (the ONLY lifecycle
+          # change). Kubelet runs this BEFORE SIGTERM: the wget flips the app
+          # to DRAINING at T+0 (readiness 503s immediately), then sleep 5
+          # lets endpoint removal propagate before SIGTERM starts the 22s
+          # application drain (5 + 22 + 3 SIGKILL margin = 30s grace,
+          # unchanged). wget mirrors the proven HEALTHCHECK binary (busybox,
+          # GET-only — hence the loopback GET trigger, not a POST). The `;`
+          # is deliberate: even if the trigger fails, the sleep still runs
+          # and SIGTERM converges alone (logged prestopSeen=false). The
+          # trigger endpoint can ONLY enter DRAINING — it never runs phases.
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - >-
+                    wget -qO- -T 2 http://127.0.0.1:5000/internal/enter-drain >/dev/null 2>&1;
+                    sleep 5
+          # Liveness = process alive ONLY (/liveness has zero dependencies, so
+          # a sick database can never cause a restart storm).
+          livenessProbe:
+            httpGet: { path: /liveness, port: http }
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 5
+          # Readiness = startup done + not shutting down + DB serving the
+          # migrated schema (/readiness gates on startupReady + migration 007
+          # row; K8s removes unready pods from endpoints without restarting).
+          readinessProbe:
+            httpGet: { path: /readiness, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            {{- toYaml .Values.backend.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: uploads
+              mountPath: /app/uploads
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: uploads
+          persistentVolumeClaim:
+            claimName: chess-uploads
+        - name: tmp
+          emptyDir:
+            sizeLimit: 32Mi

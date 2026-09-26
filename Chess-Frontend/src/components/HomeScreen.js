@@ -68,7 +68,7 @@ export default function HomeScreen({ user, token, onLogout, onAuthSuccess, onPla
       {/* top-left brand mark */}
       <div style={{ position: "fixed", top: "18px", left: "22px", display: "flex", alignItems: "center", gap: "8px", zIndex: 5 }}>
         <span style={{ fontSize: "1.3rem", color: C.gold }}><Icon name="chess-logo" size={72} /></span>
-        <span style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: "0.95rem", color: C.tx, letterSpacing: "0.08em" }}>CHESS MASTER</span>
+        <span className="cm-brand-text" style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: "0.95rem", color: C.tx, letterSpacing: "0.08em" }}>CHESS MASTER</span>
       </div>
 
       {/* hero card */}

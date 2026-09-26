@@ -1,0 +1,44 @@
+# Non-sensitive backend configuration. Secrets (DB passwords, JWT, SMTP creds,
+# origins URL, TLS CA) come from ESO-synced Secrets, never from here.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: chess-backend-config
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "chess.labels" . | nindent 4 }}
+data:
+  NODE_ENV: production
+  PORT: "5000"
+  DB_HOST: {{ required "database.host is required (RDS endpoint from Terraform outputs, via GitOps values)" .Values.database.host | quote }}
+  DB_PORT: {{ .Values.database.port | quote }}
+  DB_NAME: {{ .Values.database.name }}
+  DB_SSL: {{ .Values.database.ssl | quote }}
+  JWT_ACCESS_EXPIRES: 15m
+  REFRESH_TOKEN_DAYS: "30"
+  # Wave 7 Phase 5: 1 stays correct in EKS because nginx real_ip rewrites the
+  # client -> ALB -> nginx chain to a single trusted hop before the backend
+  # reads X-Forwarded-For (compose is 1 natively: client -> nginx). The
+  # backend FATALs on non-integer values; the Wave 7 checker pins this "1".
+  TRUST_PROXY_HOPS: "1"
+  # Wave 7: avatar store selection. local = PVC disk (safe default); s3 =
+  # private bucket via IRSA (requires avatars.bucket + aws.backendRoleArn —
+  # the chart refuses to render s3 mode without both).
+  AVATAR_STORAGE: {{ .Values.avatars.storage | quote }}
+  S3_AVATARS_BUCKET: {{ .Values.avatars.bucket | quote }}
+  AWS_REGION: {{ .Values.global.awsRegion | quote }}
+  AVATAR_S3_LEGACY_FALLBACK: {{ .Values.avatars.legacyFallback | quote }}
+{{- if and (eq .Values.avatars.storage "s3") (or (empty .Values.avatars.bucket) (empty .Values.aws.backendRoleArn)) }}
+{{- fail "avatars.storage=s3 requires avatars.bucket + aws.backendRoleArn (Terraform outputs via GitOps values)" }}
+{{- end }}
+  # Wave 7 Phase 3: socket fan-out + rematch coordination mode. REDIS_TLS is
+  # hardcoded true (no knob can disable TLS in-cluster; serverless mandates
+  # it anyway). AUTH arrives via the chess-redis ESO secret (deployment env),
+  # never here. redis mode without redis.host fails rendering on purpose.
+  SOCKET_ADAPTER: {{ .Values.backend.socketAdapter | quote }}
+  REDIS_HOST: {{ .Values.redis.host | quote }}
+  REDIS_PORT: {{ .Values.redis.port | quote }}
+  REDIS_TLS: "true"
+{{- if and (eq .Values.backend.socketAdapter "redis") (empty .Values.redis.host) }}
+{{- fail "backend.socketAdapter=redis requires redis.host (Terraform output redis_endpoint_address via GitOps values)" }}
+{{- end }}

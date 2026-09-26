@@ -69,7 +69,7 @@ export default function GameScreen({ user, game, onExit, timerMinutes }) {
   return (
     <div className="cm-screen" style={{ minHeight: "100vh", background: C.bgGradient || C.bg, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", fontFamily: "var(--font-ui)", padding: "14px", gap: "10px" }}>
 
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", maxWidth: "510px" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "6px 12px", width: "100%", maxWidth: "510px" }}>
         <div onClick={onExit} className="cm-btn" style={{ color: C.txMut, cursor: "pointer", fontSize: "var(--fs-caption)", letterSpacing: "0.08em", fontWeight: 600 }}>← MENU</div>
         <div style={{ fontFamily: "var(--font-display)", fontSize: "1.15rem", fontWeight: 700, color: C.tx, letterSpacing: "0.04em" }}>♞ Chess</div>
         {user ? <span style={{ fontSize: "var(--fs-caption)", color: C.txMut, maxWidth: "80px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{user.username}</span> : <span style={{ width: "60px" }} />}

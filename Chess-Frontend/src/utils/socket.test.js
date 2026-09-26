@@ -15,7 +15,7 @@ test("creates Socket.io with browser cookie credentials and no client token payl
   expect(socket).toBe(mockSocket);
   expect(mockIo).toHaveBeenCalledWith(window.location.origin, {
     autoConnect: false,
-    transports: ["websocket", "polling"],
+    transports: ["websocket"],
     withCredentials: true,
   });
   expect(mockIo.mock.calls[0][1]).not.toHaveProperty("auth");

@@ -1,0 +1,159 @@
+# Alloy pipeline (River). ONE collector for logs + app/K8s metrics:
+# - LOGS: node-local CRI files (/var/log/pods) -> parse -> label -> Loki.
+#   Node-local by construction (each replica sees only its own node's files).
+# - METRICS: backend (static: exactly 1 replica) + KSM (static) + kubelets
+#   (node discovery) -> remote-write to Prometheus. CLUSTERED so targets
+#   distribute across DaemonSet replicas (no duplicate series): gossip joins
+#   via the alloy-gossip headless Service (one peer is enough; memberlist
+#   spreads membership). USER-SIDE: verify no duplicates with
+#     count by (job) (up{job=~"backend|kube-state-metrics|kubelet"})
+#   (expect 1 per job; the FALLBACK in the chart README covers failures).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alloy-config
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "obs.labels" . | nindent 4 }}
+data:
+  config.alloy: |
+    logging {
+      level  = "info"
+      format = "json"
+    }
+
+    cluster {
+      enabled        = true
+      name           = "chess-alloy"
+      join_addresses = ["alloy-gossip:12345"]
+    }
+
+    // ---------------- logs: node-local CRI files -> Loki ----------------
+    local.file_match "pods" {
+      path_targets = [{ __path__ = "/var/log/pods/*/*/*.log" }]
+    }
+
+    loki.source.file "pods" {
+      targets    = local.file_match.pods.targets
+      forward_to = [loki.process.pods.receiver]
+    }
+
+    loki.process "pods" {
+      // CRI log lines: "<time> <stream> <flags> <message>".
+      stage.cri {}
+
+      // /var/log/pods/<ns>_<pod>_<uid>/<container>/*.log -> labels.
+      stage.regex {
+        source     = "filename"
+        expression = "pods/(?P<namespace>[^_]+)_(?P<pod>[^_]+)_[^/]+/(?P<container>[^/]+)/.*"
+      }
+
+      stage.labels {
+        values = {
+          namespace = "",
+          pod       = "",
+          container = "",
+        }
+      }
+
+      stage.static_labels {
+        values = { cluster = "chess-staging" }
+      }
+
+      forward_to = [loki.write.default.receiver]
+    }
+
+    loki.write "default" {
+      endpoint {
+        url = "http://loki:3100/loki/api/v1/push"
+      }
+    }
+
+    // ---------------- metrics -> Prometheus (remote-write) ----------------
+    prometheus.scrape "backend" {
+      clustering {
+        enabled = true
+      }
+      targets = [{
+        __address__ = "chess-backend.chess-staging.svc:5000",
+        job         = "backend",
+      }]
+      forward_to = [prometheus.remote_write.default.receiver]
+    }
+
+    prometheus.scrape "ksm" {
+      clustering {
+        enabled = true
+      }
+      targets = [{
+        __address__ = "kube-state-metrics:8080",
+        job         = "kube-state-metrics",
+      }]
+      forward_to = [prometheus.remote_write.default.receiver]
+    }
+
+    discovery.kubernetes "nodes" {
+      role = "node"
+    }
+
+    discovery.relabel "kubelet" {
+      targets = discovery.kubernetes.nodes.targets
+
+      rule {
+        source_labels = ["__meta_kubernetes_node_name"]
+        target_label  = "node"
+      }
+
+      rule {
+        source_labels = ["__address__"]
+        regex         = "(.+)"
+        replacement   = "$1:10250"
+        target_label  = "__address__"
+      }
+
+      rule {
+        target_label = "job"
+        replacement  = "kubelet"
+      }
+    }
+
+    prometheus.scrape "kubelet" {
+      clustering {
+        enabled = true
+      }
+      targets           = discovery.relabel.kubelet.output
+      scheme            = "https"
+      bearer_token_file = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+
+      tls_config {
+        ca_file = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+      }
+
+      forward_to = [prometheus.remote_write.default.receiver]
+    }
+
+    prometheus.remote_write "default" {
+      endpoint {
+        url = "http://prometheus:9090/api/v1/write"
+      }
+    }
+---
+# Headless service for Alloy gossip (DNS A records = all DaemonSet pods).
+# NOT a scrape target (Prometheus discovers alloy pods via kubernetes_sd).
+apiVersion: v1
+kind: Service
+metadata:
+  name: alloy-gossip
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "obs.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "obs.selectorLabels" (dict "component" "alloy") | nindent 4 }}
+  ports:
+    - name: http
+      port: 12345
+      targetPort: http
+      protocol: TCP

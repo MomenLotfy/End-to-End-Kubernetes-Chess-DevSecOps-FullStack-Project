@@ -1,0 +1,99 @@
+# Loki: single-binary StatefulSet, TSDB index + filesystem chunks on encrypted
+# gp3. staging retention 168h (7d) with compactor-driven expiry. This is NOT
+# the production architecture: Wave 8 moves to S3 object storage + RF=3 (see
+# chart README §Loki-storage). Runs as UID 10001 (image default).
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: loki
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "obs.labels" . | nindent 4 }}
+    {{- include "obs.selectorLabels" (dict "component" "loki") | nindent 4 }}
+spec:
+  serviceName: loki
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "obs.selectorLabels" (dict "component" "loki") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "obs.labels" . | nindent 8 }}
+        {{- include "obs.selectorLabels" (dict "component" "loki") | nindent 8 }}
+    spec:
+      serviceAccountName: loki
+      automountServiceAccountToken: false
+      securityContext:
+        runAsUser: 10001
+        runAsGroup: 10001
+        runAsNonRoot: true
+        fsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: loki
+          image: {{ include "obs.image" (dict "registry" .Values.global.registry "repository" .Values.loki.image.repository "tag" .Values.loki.image.tag "digest" .Values.loki.image.digest "context" "loki") }}
+          imagePullPolicy: IfNotPresent
+          args: ["-config.file=/etc/loki/loki.yaml"]
+          ports:
+            - name: http
+              containerPort: 3100
+              protocol: TCP
+          livenessProbe:
+            httpGet: { path: /ready, port: http }
+            initialDelaySeconds: 45
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: { path: /ready, port: http }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.loki.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            seccompProfile: { type: RuntimeDefault }
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - name: config
+              mountPath: /etc/loki/loki.yaml
+              subPath: loki.yaml
+              readOnly: true
+            - name: data
+              mountPath: /loki
+      volumes:
+        - name: config
+          configMap: { name: loki-config }
+      terminationGracePeriodSeconds: 60
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "obs.labels" . | nindent 10 }}
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: {{ .Values.storage.storageClassName }}
+        resources:
+          requests: { storage: {{ .Values.loki.storageSize }} }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: loki
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "obs.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "obs.selectorLabels" (dict "component" "loki") | nindent 4 }}
+  ports:
+    - name: http
+      port: 3100
+      targetPort: http
+      protocol: TCP

@@ -48,6 +48,22 @@ const Game = {
     const result = await query("SELECT * FROM games WHERE room_id=$1", [roomId]);
     return result.rows[0] || null;
   },
+  // Wave 7 Phase 4 — room snapshot for lazy hydration + refresh. ONE query:
+  // the room's game row plus its moves in order (same shape as
+  // findRecoverable rows, so one builder serves boot/hydrate/refresh).
+  // Deliberately NO status filter: callers decide acceptance (hydrate takes
+  // in_progress + finished so rematch-rejoin works on any replica; other
+  // statuses are dead and callers evict).
+  async findRoomSnapshot(roomId) {
+    const result = await query(
+      `SELECT g.*, COALESCE(json_agg(m ORDER BY m.move_number) FILTER (WHERE m.id IS NOT NULL), '[]') AS persisted_moves
+       FROM games g LEFT JOIN moves m ON m.game_id=g.id
+       WHERE g.room_id=$1 AND g.game_mode='multiplayer'
+       GROUP BY g.id`,
+      [roomId]
+    );
+    return result.rows[0] || null;
+  },
   async findById(id) {
     const result = await query("SELECT * FROM games WHERE id=$1", [id]);
     return result.rows[0] || null;

@@ -1,0 +1,58 @@
+{
+  "title": "Database / RDS",
+  "uid": "chess-database",
+  "tags": ["chess", "staging", "database"],
+  "timezone": "utc",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-3h", "to": "now" },
+  "templating": { "list": [] },
+  "links": [],
+  "panels": [
+    {
+      "id": 1, "type": "text", "title": "RDS-native signals live in CloudWatch",
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 5 },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": {
+        "mode": "markdown",
+        "content": "CPU, connections, free storage, read/write latency, IOPS and replica lag are authoritative in CloudWatch (namespace AWS/RDS, DBInstanceIdentifier from `terraform output`). Prometheus must NOT scrape RDS. Correlate: app-side pool/query panels below with CloudWatch `DatabaseConnections`, `FreeableMemory`, `FreeStorageSpace`, `ReadLatency`, `WriteLatency`, `CPUUtilization`. Exact commands: docs/runbooks/database-connectivity.md."
+      }
+    },
+    {
+      "id": 2, "type": "timeseries", "title": "DB pool: total / idle / waiting",
+      "gridPos": { "x": 0, "y": 5, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "chess-prometheus" },
+      "targets": [{ "refId": "A", "expr": "db_pool_connections", "legendFormat": "{{state}}" }],
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right" } }
+    },
+    {
+      "id": 3, "type": "timeseries", "title": "DB query latency p50/p95 (all ops)",
+      "gridPos": { "x": 12, "y": 5, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "chess-prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le) (rate(db_query_duration_seconds_bucket[5m])))", "legendFormat": "p50" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(db_query_duration_seconds_bucket[5m])))", "legendFormat": "p95" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right" } }
+    },
+    {
+      "id": 4, "type": "timeseries", "title": "DB query errors by operation",
+      "gridPos": { "x": 0, "y": 13, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "chess-prometheus" },
+      "targets": [{ "refId": "A", "expr": "sum by (operation) (rate(db_query_errors_total[5m]))", "legendFormat": "{{operation}}" }],
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right" } }
+    },
+    {
+      "id": 5, "type": "timeseries", "title": "DB query rate by operation",
+      "gridPos": { "x": 12, "y": 13, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "chess-prometheus" },
+      "targets": [{ "refId": "A", "expr": "sum by (operation) (rate(db_query_duration_seconds_count[5m]))", "legendFormat": "{{operation}}" }],
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right" } }
+    }
+  ]
+}

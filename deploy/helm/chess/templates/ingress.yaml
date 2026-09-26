@@ -1,0 +1,48 @@
+# Public entrypoint: internet -> ALB (:443 ACM TLS, :80 redirects to :443) ->
+# frontend Service (ClusterIP). There is deliberately NO backend route: the
+# backend is reachable only through the frontend nginx same-origin proxy
+# (/api, /uploads, /socket.io), which preserves cookie/CSRF semantics.
+#
+# PUBLIC INGRESS JUSTIFICATION (every public rule documented): the ALB
+# controller auto-manages a security group allowing 0.0.0.0/0 -> 80/443. That
+# is the intended public surface (staging web app); :80 only redirects.
+# No other 0.0.0.0/0 exists in the Wave 5 data path.
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: chess
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "chess.labels" . | nindent 4 }}
+  annotations:
+    alb.ingress.kubernetes.io/scheme: {{ .Values.ingress.scheme }}
+    alb.ingress.kubernetes.io/target-type: {{ .Values.ingress.targetType }}
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443},{"HTTP":80}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    alb.ingress.kubernetes.io/certificate-arn: {{ required "ingress.certificateArn is required (ACM ARN via GitOps values; never invented)" .Values.ingress.certificateArn }}
+    alb.ingress.kubernetes.io/healthcheck-path: /
+    alb.ingress.kubernetes.io/healthcheck-port: "80"
+    alb.ingress.kubernetes.io/success-codes: "200"
+    # Wave 7 Phase 5: pin the XFF contract the identity chain depends on.
+    # append (the AWS default, pinned against account-level drift): the ALB
+    # appends the client IP, so nginx real_ip + backend trust=1 attribute the
+    # true client (preserve/remove modes would hand attribution to spoofable
+    # input). xff_client_port stays disabled: a ":port" suffix would break IP
+    # parsing in both limiters.
+    alb.ingress.kubernetes.io/load-balancer-attributes: routing.http.xff_header_processing.mode=append,routing.http.xff_client_port.enabled=false
+    # WAF-ready (association is a Wave 8 production hardening, not staging).
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+    - host: {{ required "ingress.host is required (public staging host via GitOps values)" .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Values.frontend.service.name }}
+                port:
+                  number: {{ .Values.frontend.service.port }}
+{{- end }}

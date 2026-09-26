@@ -84,11 +84,12 @@ The migration container executes every ordered migration in a transaction:
 003_achievements.sql
 004_friends.sql
 005_tournaments.sql
+006_add_game_board_fen.sql
 006_security_integrity.sql
 007_fullstack_hardening.sql
 ```
 
-It holds a PostgreSQL advisory lock, stores SHA-256 checksums, and refuses a changed migration that was already applied. Backend readiness requires all seven migrations with checksums.
+It holds a PostgreSQL advisory lock, stores SHA-256 checksums, and refuses a changed migration that was already applied. The runner applies all eight files in lexical order; backend startup additionally requires the seven named migrations with checksums, and readiness requires migration 007. Existing migration filenames are frozen (see docs/security/wave1-baseline.md); new migrations continue at 008+.
 
 Run real PostgreSQL integration/concurrency tests in an isolated `chess_test` database:
 
@@ -142,16 +143,25 @@ Self-signed test certificates and Mailpit are not production configuration.
 Create a PostgreSQL custom-format backup and verify its catalog:
 
 ```bash
+# One-time setup: create the backup passphrase OUTSIDE the repo (mode 0600)
+openssl rand -base64 32 > ~/.chess-backup-passphrase && chmod 600 ~/.chess-backup-passphrase
+export BACKUP_PASSPHRASE_FILE=~/.chess-backup-passphrase
 scripts/backup-postgres.sh
 ```
+
+Backups are AES-256-CBC encrypted (`openssl enc -pbkdf2`), checksummed, and pruned after
+`BACKUP_KEEP_DAYS` (default 14). Set `BACKUP_OFFHOST_DIR` to a mounted off-host location
+(USB/NFS/remote filesystem) for an automatic second copy; see docs/security/wave1-baseline.md.
 
 Restore without touching the live database; the default target is `chess_restore_verify`:
 
 ```bash
-scripts/restore-postgres.sh backups/chess-YYYYMMDDTHHMMSSZ.dump
+scripts/restore-postgres.sh backups/chess-YYYYMMDDTHHMMSSZ.dump.enc
 ```
 
-The restore command recreates the verification database, uses `pg_restore --exit-on-error`, and confirms all seven migration records. Backups remain local to the server; copy encrypted backups off-host according to the required retention policy.
+The restore command verifies the checksum, recreates the verification database, uses
+`pg_restore --exit-on-error`, and confirms the migration-record count matches the migration
+files on disk. Legacy unencrypted `.dump` files remain readable by the restore script.
 
 ## Graceful operation
 

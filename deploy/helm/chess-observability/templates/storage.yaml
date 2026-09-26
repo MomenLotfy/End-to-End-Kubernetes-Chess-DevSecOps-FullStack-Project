@@ -1,0 +1,18 @@
+# Dedicated StorageClass (self-contained: no dependency on the app chart's
+# class or on ArgoCD app sync order). Identical security posture: gp3,
+# encrypted, WaitForFirstConsumer, allowVolumeExpansion. Reclaim Delete is
+# correct for STAGING telemetry ( Prometheus/Loki data is disposable; nothing
+# here is a system of record — see retention table in chart README).
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ .Values.storage.storageClassName }}
+  labels:
+    {{- include "obs.labels" . | nindent 4 }}
+provisioner: ebs.csi.aws.com
+parameters:
+  type: gp3
+  encrypted: "true"
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+reclaimPolicy: Delete

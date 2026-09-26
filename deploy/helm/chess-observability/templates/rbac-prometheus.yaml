@@ -1,0 +1,31 @@
+# Prometheus RBAC — NAMESPACED on purpose. Prometheus scrapes obs components via
+# static DNS names plus Alloy pods via in-namespace pod discovery, so it needs
+# nothing cluster-wide (no nodes, no cross-namespace reads). If a future job
+# needs cluster discovery, it must be added here with justification.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: chess-obs-prometheus
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "obs.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: chess-obs-prometheus
+  namespace: {{ .Values.namespace.name }}
+  labels:
+    {{- include "obs.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: prometheus
+    namespace: {{ .Values.namespace.name }}
+roleRef:
+  kind: Role
+  name: chess-obs-prometheus
+  apiGroup: rbac.authorization.k8s.io

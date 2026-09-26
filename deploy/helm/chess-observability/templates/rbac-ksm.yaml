@@ -1,0 +1,55 @@
+# kube-state-metrics RBAC — broad READ by design (it exports object state for
+# the whole cluster: replicas, restarts, job status, capacities). This is the
+# documented upstream-standard read set, with NO write verbs and NO access to
+# secrets, roles/rolebindings, or webhook configurations. If KSM logs
+# "forbidden" user-side for a resource below, that resource was renamed
+# upstream — add it only after review (USER-SIDE VALIDATION REQUIRED).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: chess-obs-kube-state-metrics
+  labels:
+    {{- include "obs.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources:
+      ["configmaps", "endpoints", "limitranges", "namespaces", "nodes",
+       "persistentvolumeclaims", "persistentvolumes", "pods", "replicationcontrollers",
+       "resourcequotas", "services"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["daemonsets", "deployments", "replicasets", "statefulsets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources: ["cronjobs", "jobs"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses", "networkpolicies"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses", "volumeattachments"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["certificates.k8s.io"]
+    resources: ["certificatesigningrequests"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: chess-obs-kube-state-metrics
+  labels:
+    {{- include "obs.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: kube-state-metrics
+    namespace: {{ .Values.namespace.name }}
+roleRef:
+  kind: ClusterRole
+  name: chess-obs-kube-state-metrics
+  apiGroup: rbac.authorization.k8s.io

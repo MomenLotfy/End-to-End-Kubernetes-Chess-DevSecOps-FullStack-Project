@@ -1,0 +1,96 @@
+{
+  "title": "Chess Backend / API",
+  "uid": "chess-backend",
+  "tags": ["chess", "staging", "api"],
+  "timezone": "utc",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-3h", "to": "now" },
+  "templating": { "list": [] },
+  "links": [],
+  "panels": [
+    {
+      "id": 1, "type": "timeseries", "title": "Request rate by route (top 10)",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "chess-prometheus" },
+      "targets": [{ "refId": "A", "expr": "topk(10, sum by (route) (rate(http_requests_total[5m])))", "legendFormat": "{{route}}" }],
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right" } }
+    },
+    {
+      "id": 2, "type": "timeseries", "title": "4xx / 5xx rate",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "chess-prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(http_requests_total{status_class=\"4xx\"}[5m]))", "legendFormat": "4xx" },
+        { "refId": "B", "expr": "sum(rate(http_requests_total{status_class=\"5xx\"}[5m]))", "legendFormat": "5xx" }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right" } }
+    },
+    {
+      "id": 3, "type": "timeseries", "title": "Latency p50/p95/p99",
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "chess-prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le) (rate(http_request_duration_seconds_bucket[5m])))", "legendFormat": "p50" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket[5m])))", "legendFormat": "p95" },
+        { "refId": "C", "expr": "histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket[5m])))", "legendFormat": "p99" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right" } }
+    },
+    {
+      "id": 4, "type": "timeseries", "title": "Requests in flight + event-loop lag",
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "chess-prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "http_requests_in_flight", "legendFormat": "in flight" },
+        { "refId": "B", "expr": "eventloop_lag_seconds", "legendFormat": "event-loop lag (s)" }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right" } }
+    },
+    {
+      "id": 5, "type": "timeseries", "title": "DB pool by state",
+      "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "chess-prometheus" },
+      "targets": [{ "refId": "A", "expr": "db_pool_connections", "legendFormat": "{{state}}" }],
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right" } }
+    },
+    {
+      "id": 6, "type": "timeseries", "title": "DB query p95 by operation + errors",
+      "gridPos": { "x": 12, "y": 16, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "chess-prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, operation) (rate(db_query_duration_seconds_bucket[5m])))", "legendFormat": "p95 {{operation}}" },
+        { "refId": "B", "expr": "sum by (operation) (rate(db_query_errors_total[5m]))", "legendFormat": "errors {{operation}}" }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right" } }
+    },
+    {
+      "id": 7, "type": "timeseries", "title": "App errors by component",
+      "gridPos": { "x": 0, "y": 24, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "chess-prometheus" },
+      "targets": [{ "refId": "A", "expr": "sum by (component) (rate(app_errors_total[5m]))", "legendFormat": "{{component}}" }],
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right" } }
+    },
+    {
+      "id": 8, "type": "timeseries", "title": "Socket.io: active / connects / auth failures",
+      "gridPos": { "x": 12, "y": 24, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "chess-prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "socket_io_connections_active", "legendFormat": "active" },
+        { "refId": "B", "expr": "sum(rate(socket_io_connects_total[5m]))", "legendFormat": "connects/s" },
+        { "refId": "C", "expr": "sum(rate(socket_io_auth_failures_total[5m]))", "legendFormat": "auth failures/s" },
+        { "refId": "D", "expr": "sum(rate(room_operation_failures_total[5m]))", "legendFormat": "room failures/s" }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right" } }
+    }
+  ]
+}
